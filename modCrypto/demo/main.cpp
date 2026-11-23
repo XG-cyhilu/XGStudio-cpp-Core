@@ -29,6 +29,10 @@ int main() {
     printf("[1] sha256(abc) = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Sha256, abc, 3).c_str());
     printf("[1] sha1(abc)   = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Sha1, abc, 3).c_str());
     printf("[1] md5(abc)    = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Md5, abc, 3).c_str());
+    printf("[1] sha384(\"\")  = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Sha384, nullptr, 0).c_str());
+    printf("[1] sha384(abc) = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Sha384, abc, 3).c_str());
+    printf("[1] sha512(\"\")  = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Sha512, nullptr, 0).c_str());
+    printf("[1] sha512(abc) = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Sha512, abc, 3).c_str());
 
     // 2) 分块喂入 == 一次喂入
     std::string big(3 * 1024 * 1024, '\0');
@@ -61,5 +65,21 @@ int main() {
 
     // 5) 与系统工具口径一致（certutil 用大写，比较前转小写）
     printf("[5] sha1 empty = %s\n", xgcrypto::HashHex(xgcrypto::Alg::Sha1, nullptr, 0).c_str());
+
+    // 6) 长度/名字 + SHA-512 的块边界（1023 字节 = 8 个 128 字节块差 1，补位跨块）
+    for (auto a : { xgcrypto::Alg::Md5, xgcrypto::Alg::Sha1, xgcrypto::Alg::Sha256, xgcrypto::Alg::Sha384,
+                    xgcrypto::Alg::Sha512 })
+        printf("[6] %-7s size=%u\n", xgcrypto::AlgName(a), xgcrypto::DigestSize(a));
+
+    std::string b1023(1023, 'Z');
+    std::vector<uint8_t> once512 = xgcrypto::Hash(xgcrypto::Alg::Sha512, b1023.data(), b1023.size());
+    xgcrypto::Digest d512(xgcrypto::Alg::Sha512);
+    for (size_t off = 0; off < b1023.size(); off += 37) {
+        size_t n = (off + 37 > b1023.size()) ? b1023.size() - off : 37;
+        d512.Update(b1023.data() + off, n);
+    }
+    std::vector<uint8_t> chunk512;
+    d512.Final(chunk512);
+    printf("[6] sha512 1023B chunked==once: %d\n", (int)xgcrypto::Equals(once512, chunk512));
     return 0;
 }

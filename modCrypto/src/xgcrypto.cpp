@@ -35,6 +35,8 @@ const wchar_t* AlgId(Alg a) {
         case Alg::Md5: return BCRYPT_MD5_ALGORITHM;
         case Alg::Sha1: return BCRYPT_SHA1_ALGORITHM;
         case Alg::Sha256: return BCRYPT_SHA256_ALGORITHM;
+        case Alg::Sha384: return BCRYPT_SHA384_ALGORITHM;
+        case Alg::Sha512: return BCRYPT_SHA512_ALGORITHM;
     }
     return BCRYPT_SHA256_ALGORITHM;
 }
@@ -75,6 +77,8 @@ uint32_t DigestSize(Alg a) {
         case Alg::Md5: return 16;
         case Alg::Sha1: return 20;
         case Alg::Sha256: return 32;
+        case Alg::Sha384: return 48;
+        case Alg::Sha512: return 64;
     }
     return 0;
 }
@@ -84,6 +88,8 @@ const char* AlgName(Alg a) {
         case Alg::Md5: return "md5";
         case Alg::Sha1: return "sha1";
         case Alg::Sha256: return "sha256";
+        case Alg::Sha384: return "sha384";
+        case Alg::Sha512: return "sha512";
     }
     return "?";
 }

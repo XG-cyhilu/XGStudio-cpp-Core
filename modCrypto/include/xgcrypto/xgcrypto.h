@@ -32,9 +32,11 @@ enum class Alg {
     Md5,
     Sha1,
     Sha256,
+    Sha384,
+    Sha512,
 };
 
-// 算法的摘要长度（字节）：16 / 20 / 32
+// 算法的摘要长度（字节）：16 / 20 / 32 / 48 / 64
 uint32_t DigestSize(Alg a);
 const char* AlgName(Alg a);
 

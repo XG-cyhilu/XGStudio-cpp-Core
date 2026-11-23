@@ -2,7 +2,7 @@
 
 摘要计算（Windows / C++17 / 静态库 / Apache-2.0），基于系统 CNG（`bcrypt.dll`）。
 
-只做"算哈希"：MD5 / SHA1 / SHA256，字节流或文件，分块或一次性，结果给字节或十六进制。
+只做"算哈希"：MD5 / SHA1 / SHA256 / SHA384 / SHA512，字节流或文件，分块或一次性，结果给字节或十六进制。
 
 ```cpp
 #include <xgcrypto/xgcrypto.h>
@@ -25,7 +25,8 @@ MD5/SHA 自己写的问题不在于写不出来，而在于**没人会去测边�
 | `Hash(Alg, data, len)` | 一次性，返回字节 |
 | `HashHex(Alg, data, len)` | 一次性，返回小写十六进制 |
 | `HashFile(Alg, path)` / `HashFileHex` | 读文件（256KB 块，不整文件进内存） |
-| `DigestSize(Alg)` | 16 / 20 / 32 |
+| `DigestSize(Alg)` | 16 / 20 / 32 / 48 / 64 |
+| `AlgName(Alg)` | `"md5"` / `"sha1"` / `"sha256"` / `"sha384"` / `"sha512"` |
 | `ToHex` / `FromHex` | 字节 ↔ 十六进制；`FromHex` 遇非法字符或奇数长度返回空 |
 | `Equals(a, b)` | 定长比较，不按前缀提前退出 |
 
@@ -57,7 +58,9 @@ bool ok = xgcrypto::Equals(xgcrypto::HashFile(xgcrypto::Alg::Sha1, path),
 | --- | --- |
 | 空串 SHA256 | `e3b0c44298fc1c14...b855`（标准向量） |
 | `abc` SHA256 / SHA1 / MD5 | 三组标准向量全部一致 |
+| 空串与 `abc` 的 SHA384 / SHA512 | 四组标准向量全部一致（`cf83e135...da3e` / `ddaf35a1...ca49f` 等） |
 | 3MB 数据分块喂入 vs 一次性 | 结果相同 |
+| 1023 字节（跨 8 个 128 字节块，补位跨块）SHA512 按 37 字节碎块喂 | 与一次性结果相同 |
 | 写文件再 `HashFile` | 与内存结果相同 |
 | hex 往返 | 32 字节往返一致；`"xyz"` 判非法返回空 |
 
