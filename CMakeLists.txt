@@ -29,6 +29,7 @@ project(cpploclib VERSION 1.0.0 LANGUAGES CXX)
 
 option(CPPLOCLIB_BUILD_DOWNLOAD "Build the XGDL download module" ON)
 option(CPPLOCLIB_BUILD_LOG "Build the XGLOG logging module" ON)
+option(CPPLOCLIB_BUILD_PROC "Build the XGPROC subprocess module" ON)
 option(CPPLOCLIB_BUILD_DEMOS "Build module demos" ON)
 
 if (CPPLOCLIB_BUILD_DOWNLOAD)
@@ -39,4 +40,9 @@ endif()
 if (CPPLOCLIB_BUILD_LOG)
     set(XGLOG_BUILD_DEMO ${CPPLOCLIB_BUILD_DEMOS} CACHE BOOL "" FORCE)
     add_subdirectory(modLog)
+endif()
+
+if (CPPLOCLIB_BUILD_PROC)
+    set(XGPROC_BUILD_DEMO ${CPPLOCLIB_BUILD_DEMOS} CACHE BOOL "" FORCE)
+    add_subdirectory(modProc)
 endif()
