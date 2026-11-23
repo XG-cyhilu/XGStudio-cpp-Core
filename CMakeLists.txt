@@ -1,0 +1,36 @@
+# Copyright 2026 XGstudio
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# cpploclib —— XGstudio 的 C++ 公共组件聚合（每个子目录一个独立可用的库）
+#
+#   modDownload/   XGDL，多路复用下载库          → 目标 XGDL::xgdl
+#
+# 用法（二选一）：
+#   add_subdirectory(cpploclib)
+#   target_link_libraries(YourApp PRIVATE XGDL::xgdl)
+#
+# 或者单独使用某个模块目录，各模块自身也能独立 configure。
+
+cmake_minimum_required(VERSION 3.20)
+project(cpploclib VERSION 1.0.0 LANGUAGES CXX)
+
+option(CPPLOCLIB_BUILD_DOWNLOAD "Build the XGDL download module" ON)
+option(CPPLOCLIB_BUILD_DEMOS "Build module demos" ON)
+
+if (CPPLOCLIB_BUILD_DOWNLOAD)
+    set(XGDL_BUILD_DEMO ${CPPLOCLIB_BUILD_DEMOS} CACHE BOOL "" FORCE)
+    add_subdirectory(modDownload)
+endif()

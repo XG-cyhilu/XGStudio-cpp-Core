@@ -1,0 +1,40 @@
+# 构建产物
+/.build/
+**/.build/
+/build/
+**/CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+
+# 第三方源码与预编译依赖（体积大，不入库）
+/.deps/
+**/.deps/
+
+# 二进制
+*.lib
+*.dll
+*.exe
+*.pdb
+*.obj
+*.ilk
+*.exp
+*.iobj
+*.ipdb
+
+# 测试残留
+*.part*
+xgdl_trace.log
+xgdl_demo.log
+/testout/
+**/batchout/
+
+# IDE
+/.vs/
+**/.vs/
+*.vcxproj.user
+*.sln.docstates
+/.vscode/
+
+# 系统
+Thumbs.db
+.DS_Store
