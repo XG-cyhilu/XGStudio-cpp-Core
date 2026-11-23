@@ -11,6 +11,7 @@ Apache-2.0 许可与构建约定（C++17、MSVC `/utf-8`、UTF-8 BOM 源码、CM
 | 目录 | 库 | CMake 目标 | 说明 |
 |---|---|---|---|
 | `modDownload/` | XGDL | `XGDL::xgdl` | libcurl `CURLM` 多路复用 + 大小文件分离线程池的下载库：分块 Range、SHA1 校验、退避重试、原子进度轮询及 UI 事件 |
+| `modLog/` | XGLOG | `XGLOG::xglog` | 异步日志：固定内存环形队列、队列满即丢并计数、分级过滤、文件轮转、控制台着色、UI 轮询拉取 |
 
 后续模块在此表登记。
 
