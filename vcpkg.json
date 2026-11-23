@@ -2,7 +2,7 @@
   "name": "cpploclib",
   "version-string": "1.0.0",
   "description": "XGstudio C++ 公共组件：XGDL 多路复用下载库",
-  "homepage": "https://github.com/XG-cyhilu/cpploclib",
+  "homepage": "https://github.com/XG-cyhilu/XGStudio-cpp-Core",
   "license": "Apache-2.0",
   "supports": "windows",
   "dependencies": [

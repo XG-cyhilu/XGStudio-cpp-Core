@@ -1,6 +1,6 @@
-# cpploclib
+# XGStudio-cpp-Core
 
-XGstudio 的 C++ 公共组件聚合库。每个子目录是一个可以单独拿走、单独构建的库，共享同一套
+XGstudio 的 C++ 公共组件聚合库（本地目录名仍为 `cpploclib`）。每个子目录是一个可以单独拿走、单独构建的库，共享同一套
 Apache-2.0 许可与构建约定（C++17、MSVC `/utf-8`、UTF-8 BOM 源码、CMake `find_package` 导出）。
 
 主要用于 [Void Craft Launcher](https://github.com/XG-cyhilu/Void-Craft-UI) 及其生态，
