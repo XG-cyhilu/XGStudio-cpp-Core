@@ -19,10 +19,74 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 
 namespace xgthread {
+
+namespace detail {
+
+// 一份令牌状态：原子标志 + 子令牌弱引用（不拖住子令牌的生命周期）
+struct CancelState {
+    std::atomic<bool> cancelled{ false };
+    mutable std::mutex mu;                          // 保护 kids；也供 WaitCancel 的条件变量
+    mutable std::condition_variable cv;
+    std::vector<std::weak_ptr<CancelState>> kids;
+
+    void Cancel() {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (cancelled.load()) return;           // 幂等
+            cancelled.store(true);
+        }
+        cv.notify_all();
+        std::vector<std::shared_ptr<CancelState>> snapshot;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            for (auto& w : kids)
+                if (auto s = w.lock()) snapshot.push_back(s);
+        }
+        for (auto& s : snapshot) s->Cancel();
+    }
+};
+
+} // namespace detail
+
+CancelToken::CancelToken() : st_(std::make_shared<detail::CancelState>()) {}
+
+CancelToken::CancelToken(std::shared_ptr<detail::CancelState> st) : st_(std::move(st)) {}
+
+void CancelToken::Cancel() {
+    if (st_) st_->Cancel();
+}
+
+bool CancelToken::Cancelled() const {
+    return st_ && st_->cancelled.load(std::memory_order_relaxed);
+}
+
+// 定义在 .cpp：头里内联写 throw Cancelled{} 会先解析到同名成员函数 Cancelled()，MSVC 报 C3321
+void CancelToken::ThrowIfCancelled() const {
+    if (Cancelled()) throw xgthread::Cancelled{};
+}
+
+bool CancelToken::WaitCancel(uint32_t timeoutMs) const {
+    if (!st_) return false;
+    std::unique_lock<std::mutex> lk(st_->mu);
+    return st_->cv.wait_for(lk, std::chrono::milliseconds(timeoutMs),
+                            [this] { return st_->cancelled.load(std::memory_order_relaxed); });
+}
+
+CancelToken CancelToken::Child(const CancelToken& parent) {
+    auto st = std::make_shared<detail::CancelState>();
+    if (parent.st_) {
+        std::lock_guard<std::mutex> lk(parent.st_->mu);
+        // 父已取消：子直接继承状态，不用再登记
+        if (parent.st_->cancelled.load(std::memory_order_relaxed)) st->cancelled.store(true);
+        else parent.st_->kids.push_back(st);
+    }
+    return CancelToken(std::move(st));
+}
 
 uint32_t HardwareThreads() {
     DWORD_PTR mask = 0;

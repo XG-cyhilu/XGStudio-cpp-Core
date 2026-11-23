@@ -1,6 +1,6 @@
 # XGTHREAD
 
-线程池 + 主线程调度队列（Windows / C++17 / 静态库 / Apache-2.0），无第三方依赖。
+线程池 + 主线程调度队列 + 协作取消（Windows / C++17 / 静态库 / Apache-2.0），无第三方依赖。
 
 ```cpp
 #include <xgthread/xgthread.h>
@@ -26,7 +26,7 @@ ui.RunPending();
 
 两者职责不同，混成一个 API 反而到处是"这个回调在哪个线程"的注释。分成 `Pool` 和 `MainQueue`，边界一眼就能看出来。
 
-**刻意不做**：优先级、任务取消、work-stealing、定时器。这些语义需要自己的调度策略，加开关只会让默认路径变慢。
+**刻意不做**：优先级、work-stealing、定时器。取消不做抢占（`TerminateThread` 只会留下半截文件），而是给一个协作式 `CancelToken`，长任务自己检查。
 
 ## Pool
 
@@ -53,6 +53,30 @@ ui.RunPending();
 
 `RunPending` 先把一批任务挪出队列、**释放锁再执行**，所以任务内部可以继续 `Post`（下一帧执行），不会自锁。每帧调用一次即可，也可以限个数（比如 16）来保证帧时间。
 
+## CancelToken（协作取消）
+
+```cpp
+auto tok = xgthread::CancelToken();
+pool.Post([tok] {
+    for (auto& chunk : chunks) {
+        tok.ThrowIfCancelled();          // 抛 xgthread::Cancelled
+        DownloadChunk(chunk);
+    }
+});
+tok.Cancel();                            // UI 线程点"取消"，立刻生效
+```
+
+| 接口 | 说明 |
+| --- | --- |
+| `CancelToken()` | 新建一个独立令牌（`Cancel()` 前永远不取消） |
+| 拷贝 / 赋值 | 副本共享同一份状态，任意一份 `Cancel()` 全体生效 |
+| `Cancel()` | 幂等；同时向下递归取消所有子令牌 |
+| `Cancelled()` / `ThrowIfCancelled()` | 轮询 / 抛 `xgthread::Cancelled`（`Pool::Submit` 的 future 会把这个异常带出来） |
+| `WaitCancel(ms)` | 等最多 `ms`，期间被取消返回 `true`（避免忙等轮询） |
+| `Child(parent)` | 父被取消时子一起取消；取消子不影响父 |
+
+用法约定：**谁发起谁持有根令牌**，把副本（或 `Child`）交给任务；任务里只在"可中断点"检查（每循环一次、每写一块、每次 HTTP 回调），不做抢占式中断。XGDL / XGZIP 的取消语义就是这样落地的。
+
 ## 实测（`xgthread_demo.exe`）
 
 | 项 | 结果 |
@@ -64,6 +88,7 @@ ui.RunPending();
 | 20 个 worker 投递到 MainQueue，主线程 `RunPending` | `onMain=20 wrongThread=0`（全部在调用线程执行） |
 | `Shutdown` 后 `Post` | 返回 0（拒绝） |
 | 任务内再提交 4 个任务（4 线程池） | 内层全部完成，`nested sum=60` |
+| 200 步循环接到取消（第 3 步停） | `future.get()` 抛 `Cancelled`；子令牌同步变为已取消 |
 
 ## 构建
 

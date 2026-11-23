@@ -28,18 +28,59 @@
 #include <utility>
 #include <vector>
 
-// XGTHREAD —— 线程池 + 主线程调度队列（Windows / C++17 / 静态库 / Apache-2.0）
+// XGTHREAD —— 线程池 + 主线程调度队列 + 协作取消（Windows / C++17 / 静态库 / Apache-2.0）
 //
-// 两件互补的事：
+// 三件互补的事：
 //   * Pool：后台干活。Submit 一个任务，要结果就用返回的 future；不要结果就 fire-and-forget。
 //   * MainQueue：把任务投回"拥有某个对象的那条线程"（UI、渲染、主循环）。
 //     谁创建谁消费：Post 是线程安全的，执行只发生在调用 RunPending 的线程上。
-// 不做优先级/取消/任务偷窃——需要那些语义时应该用专门的调度器，而不是在这里加开关。
+//   * CancelToken：协作取消。池不做抢占式中断（强杀线程只会留下半截文件），
+//     长任务自己按 token 轮询/抛异常退出。
+// 不做优先级/任务偷窃——需要那些语义时应该用专门的调度器，而不是在这里加开关。
 
 namespace xgthread {
 
 // 物理核数（含 HT 的逻辑核数）；读失败返回 4
 uint32_t HardwareThreads();
+
+// 取消时抛出的异常：任务体里 ThrowIfCancelled()，Pool::Submit 的 future 会把这个异常带出去
+class Cancelled : public std::exception {
+public:
+    const char* what() const noexcept override { return "operation cancelled"; }
+};
+
+namespace detail {
+struct CancelState;
+}
+
+// 可复制的取消令牌：副本共享同一份状态，任意一份 Cancel() 全体生效。
+//
+//   auto tok = xgthread::CancelToken();
+//   pool.Post([tok] {
+//       for (chunk : chunks) { tok.ThrowIfCancelled(); ... }
+//   });
+//   tok.Cancel();            // UI 线程点"取消"直接调
+//
+// 父子关系：Child(parent) 在 parent 被取消时一起取消，反过来不影响 parent。
+class CancelToken {
+public:
+    CancelToken();                                   // 独立 token（永远不取消，除非自己 Cancel）
+    CancelToken(const CancelToken&) = default;
+    CancelToken& operator=(const CancelToken&) = default;
+
+    void Cancel();
+    bool Cancelled() const;
+    void ThrowIfCancelled() const;                  // 取消时抛 xgthread::Cancelled
+
+    // 等一小段时间；期间被取消返回 true（给"轮询式等待"用，避免忙等）
+    bool WaitCancel(uint32_t timeoutMs) const;
+
+    static CancelToken Child(const CancelToken& parent);
+
+private:
+    explicit CancelToken(std::shared_ptr<detail::CancelState> st);
+    std::shared_ptr<detail::CancelState> st_;
+};
 
 class Pool {
 public:

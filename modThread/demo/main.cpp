@@ -92,5 +92,33 @@ int main() {
     });
     printf("[7] nested sum=%d\n", outer.get());
     p2.Shutdown(true);
+    // 8) CancelToken：协作取消 + 父子联动 + future 带出 Cancelled
+    {
+        xgthread::Pool p3(2);
+        xgthread::CancelToken parent;
+        auto child = xgthread::CancelToken::Child(parent);
+
+        std::atomic<int> steps{ 0 };
+        auto slow = p3.Submit([parent, &steps] {
+            for (int i = 0; i < 200; ++i) {
+                parent.ThrowIfCancelled();
+                steps.fetch_add(1, std::memory_order_relaxed);
+                Sleep(5);
+            }
+            return 1;
+        });
+        Sleep(40);
+        parent.Cancel();
+
+        int cancelled = 0;
+        try {
+            slow.get();
+        } catch (const xgthread::Cancelled&) {
+            cancelled = 1;
+        }
+        printf("[8] cancelled=%d steps=%d parentChildCancel=%d waitCancel=%d\n", cancelled, steps.load(),
+               (int)child.Cancelled(), (int)child.WaitCancel(0));
+        p3.Shutdown(true);
+    }
     return 0;
 }
