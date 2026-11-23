@@ -24,7 +24,7 @@
 // XGFS —— 文件与路径工具（Windows / C++17 / 静态库 / Apache-2.0）
 //
 // 只收那些"每个项目都会重新写一遍、每次都可能写错"的部分：
-// 路径规范化、原子写、临时文件、递归遍历、安全删除。
+// 路径规范化、长路径、原子写、临时文件、递归遍历、大小统计、目录替换、安全删除。
 // 不提供监控（ReadDirectoryChangesW 另算）、不提供 mmap、不提供压缩——那些各有取舍。
 
 namespace xgfs {
@@ -32,8 +32,15 @@ namespace xgfs {
 // ---------- 路径 ----------
 
 // 展开成绝对路径并统一成 '\\'，去掉多余分隔符与末尾 '\\'（根目录除外）
+// 注意：Normalize 本身不做长路径改造，超长路径请过一遍 LongPath() 再用
 std::wstring Normalize(const std::wstring& path);
 std::wstring Join(const std::wstring& a, const std::wstring& b);
+
+// 超过 MAX_PATH 时加 `\\?\`（UNC 转 `\\?\UNC\`）；短路径原样返回绝对化结果。
+// 本库内部的 CreateFile / Find / Move / Delete 已经自动套用，所以正常调用不用手动处理；
+// 只有把路径交给第三方库（libcurl、自定义 DLL）时才需要显式调用。
+std::wstring LongPath(const std::wstring& path);
+
 std::wstring FileName(const std::wstring& path);      // a\b\c.txt -> c.txt
 std::wstring Stem(const std::wstring& path);          // a\b\c.txt -> c
 std::wstring Extension(const std::wstring& path);     // a\b\c.txt -> .txt（含点，没有则为空）
@@ -49,6 +56,13 @@ bool Size(const std::wstring& path, uint64_t& bytes);      // 目录返回 false
 bool ModifiedTime(const std::wstring& path, int64_t& ms);  // 本地时区，毫秒
 bool SetModifiedTime(const std::wstring& path, int64_t ms);
 bool EnsureDir(const std::wstring& path, std::string* err = nullptr);
+
+// 目录（含子目录）里所有普通文件的大小之和；不跟随 reparse point
+bool DirSize(const std::wstring& dir, uint64_t& bytes, std::string* err = nullptr);
+
+// 所在卷的可用/总容量（字节）。path 必须存在（文件或目录都行）。
+// 下载前判断"空间够不够"用它，别自己拼 GetDiskFreeSpaceEx。
+bool DiskSpace(const std::wstring& path, uint64_t& freeBytes, uint64_t& totalBytes, std::string* err = nullptr);
 
 // ---------- 读写 ----------
 
@@ -66,12 +80,23 @@ bool WriteFileAtomic(const std::wstring& path, const std::string& text, std::str
 
 bool Move(const std::wstring& src, const std::wstring& dst, bool overwrite, std::string* err = nullptr);
 bool Copy(const std::wstring& src, const std::wstring& dst, bool overwrite, std::string* err = nullptr);
+
+// 递归删除：失败时清掉只读属性再重试（被杀软/索引器/刚写完的文件短暂占用很常见）
 bool Remove(const std::wstring& path, bool recursive = false, std::string* err = nullptr);
+bool RemoveWithRetry(const std::wstring& path, bool recursive = false, int retries = 5, int delayMs = 120,
+                     std::string* err = nullptr);
+
+// 原子式目录替换：把 src 整个换成 dst。
+// 流程 = dst→dst.old（若存在）→ src→dst → 删 dst.old；第二步失败会把 dst.old 移回去。
+// 解压/更新场景用它，避免"删了一半新目录没进来"。src 与 dst 必须同卷（rename 语义）。
+bool ReplaceDirectory(const std::wstring& src, const std::wstring& dst, std::string* err = nullptr);
 
 // ---------- 临时文件 ----------
 
 // dirHint 为空时用系统 temp；生成唯一文件名并立即创建空文件
 bool CreateTempFile(const std::wstring& dirHint, std::wstring& path, std::string* err = nullptr);
+// 同上，但建的是空目录
+bool CreateTempDir(const std::wstring& dirHint, std::wstring& path, std::string* err = nullptr);
 
 // ---------- 遍历 ----------
 

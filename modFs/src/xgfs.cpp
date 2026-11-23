@@ -52,14 +52,23 @@ FILETIME MsToFileTime(int64_t ms) {
     return ft;
 }
 
+// 长路径：达到 MAX_PATH 附近才补 `\\?\`（UNC 走 `\\?\UNC\`）。
+// 短路径原样返回——前缀会关掉 Win32 的路径归一化（"." / ".." / "/" 都失效），不能无脑加。
+std::wstring Fix(const std::wstring& p) {
+    if (p.empty() || p.size() < 248) return p;
+    if (p.size() >= 4 && p[0] == L'\\' && p[1] == L'\\' && (p[2] == L'?' || p[2] == L'.')) return p;
+    if (p.size() >= 2 && p[0] == L'\\' && p[1] == L'\\') return L"\\\\?\\UNC\\" + p.substr(2);
+    return L"\\\\?\\" + p;
+}
+
 bool MakeDirsImpl(const std::wstring& dir) {
     if (dir.empty()) return true;
-    if (GetFileAttributesW(dir.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+    if (GetFileAttributesW(Fix(dir).c_str()) != INVALID_FILE_ATTRIBUTES) return true;
     std::wstring parent = dir;
     size_t pos = parent.find_last_of(L'\\');
     if (pos != std::wstring::npos && pos > 0) MakeDirsImpl(parent.substr(0, pos));
-    CreateDirectoryW(dir.c_str(), nullptr);
-    return GetFileAttributesW(dir.c_str()) != INVALID_FILE_ATTRIBUTES;
+    CreateDirectoryW(Fix(dir).c_str(), nullptr);
+    return GetFileAttributesW(Fix(dir).c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
 bool WildMatch(const wchar_t* pat, const wchar_t* s) {
@@ -90,7 +99,7 @@ bool WildMatch(const wchar_t* pat, const wchar_t* s) {
 bool Walk(const std::wstring& dir, const ListOptions& opt, std::vector<DirEntry>& out, std::string* err) {
     WIN32_FIND_DATAW fd{};
     std::wstring mask = dir + L"\\*";
-    HANDLE h = FindFirstFileExW(mask.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
+    HANDLE h = FindFirstFileExW(Fix(mask).c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
                                 FIND_FIRST_EX_LARGE_FETCH);
     if (h == INVALID_HANDLE_VALUE) {
         SetErr(err, "find first failed");
@@ -137,6 +146,13 @@ std::wstring Normalize(const std::wstring& path) {
     // 去掉末尾多余分隔符（但保留 "C:\"）
     while (out.size() > 1 && out.back() == L'\\' && !(out.size() == 3 && out[1] == L':')) out.pop_back();
     return out;
+}
+
+std::wstring LongPath(const std::wstring& path) {
+    // 先绝对化再去前缀：`\\?\` 只接受完整路径
+    std::wstring full = Normalize(path);
+    if (full.size() >= 4 && full[0] == L'\\' && full[1] == L'\\' && (full[2] == L'?' || full[2] == L'.')) return full;
+    return Fix(full);
 }
 
 std::wstring Join(const std::wstring& a, const std::wstring& b) {
@@ -186,22 +202,22 @@ std::wstring ReplaceExtension(const std::wstring& path, const std::wstring& ext)
 }
 
 bool Exists(const std::wstring& path) {
-    return !path.empty() && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    return !path.empty() && GetFileAttributesW(Fix(path).c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
 bool IsDir(const std::wstring& path) {
-    DWORD attr = GetFileAttributesW(path.c_str());
+    DWORD attr = GetFileAttributesW(Fix(path).c_str());
     return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 bool IsFile(const std::wstring& path) {
-    DWORD attr = GetFileAttributesW(path.c_str());
+    DWORD attr = GetFileAttributesW(Fix(path).c_str());
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 bool Size(const std::wstring& path, uint64_t& bytes) {
     WIN32_FILE_ATTRIBUTE_DATA ad{};
-    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &ad)) return false;
+    if (!GetFileAttributesExW(Fix(path).c_str(), GetFileExInfoStandard, &ad)) return false;
     if (ad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
     bytes = (static_cast<uint64_t>(ad.nFileSizeHigh) << 32) | ad.nFileSizeLow;
     return true;
@@ -209,14 +225,14 @@ bool Size(const std::wstring& path, uint64_t& bytes) {
 
 bool ModifiedTime(const std::wstring& path, int64_t& ms) {
     WIN32_FILE_ATTRIBUTE_DATA ad{};
-    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &ad)) return false;
+    if (!GetFileAttributesExW(Fix(path).c_str(), GetFileExInfoStandard, &ad)) return false;
     ms = FileTimeToMs(ad.ftLastWriteTime);
     return true;
 }
 
 bool SetModifiedTime(const std::wstring& path, int64_t ms) {
     FILETIME ft = MsToFileTime(ms);
-    HANDLE h = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    HANDLE h = CreateFileW(Fix(path).c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     bool ok = SetFileTime(h, nullptr, nullptr, &ft) != 0;
@@ -234,7 +250,7 @@ bool EnsureDir(const std::wstring& path, std::string* err) {
 
 bool ReadFile(const std::wstring& path, std::string& out, std::string* err) {
     out.clear();
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    HANDLE h = CreateFileW(Fix(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
         SetErr(err, "open for read failed");
@@ -273,7 +289,7 @@ bool ReadFile(const std::wstring& path, std::vector<uint8_t>& out, std::string* 
 }
 
 bool WriteFile(const std::wstring& path, const void* data, size_t len, std::string* err) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+    HANDLE h = CreateFileW(Fix(path).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
         SetErr(err, "open for write failed");
@@ -306,7 +322,7 @@ bool WriteFileAtomic(const std::wstring& path, const void* data, size_t len, std
     if (!dir.empty() && !EnsureDir(dir, err)) return false;
 
     std::wstring tmp = full + L".tmp";
-    HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = CreateFileW(Fix(tmp).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
         SetErr(err, "create temp for atomic write failed");
         return false;
@@ -327,12 +343,12 @@ bool WriteFileAtomic(const std::wstring& path, const void* data, size_t len, std
     if (ok) FlushFileBuffers(h);
     CloseHandle(h);
     if (!ok) {
-        DeleteFileW(tmp.c_str());
+        DeleteFileW(Fix(tmp).c_str());
         return false;
     }
-    if (!MoveFileExW(tmp.c_str(), full.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (!MoveFileExW(Fix(tmp).c_str(), Fix(full).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         SetErr(err, "atomic replace failed");
-        DeleteFileW(tmp.c_str());
+        DeleteFileW(Fix(tmp).c_str());
         return false;
     }
     return true;
@@ -347,7 +363,7 @@ bool Move(const std::wstring& src, const std::wstring& dst, bool overwrite, std:
     std::wstring parent = Parent(d);
     if (!parent.empty() && !EnsureDir(parent, err)) return false;
     DWORD flags = MOVEFILE_WRITE_THROUGH | (overwrite ? MOVEFILE_REPLACE_EXISTING : 0);
-    if (!MoveFileExW(src.c_str(), d.c_str(), flags)) {
+    if (!MoveFileExW(Fix(src).c_str(), Fix(d).c_str(), flags)) {
         SetErr(err, "move failed");
         return false;
     }
@@ -362,7 +378,7 @@ bool Copy(const std::wstring& src, const std::wstring& dst, bool overwrite, std:
         SetErr(err, "destination exists");
         return false;
     }
-    if (!CopyFileW(src.c_str(), d.c_str(), overwrite ? FALSE : TRUE)) {
+    if (!CopyFileW(Fix(src).c_str(), Fix(d).c_str(), overwrite ? FALSE : TRUE)) {
         SetErr(err, "copy failed");
         return false;
     }
@@ -371,18 +387,18 @@ bool Copy(const std::wstring& src, const std::wstring& dst, bool overwrite, std:
 
 bool Remove(const std::wstring& path, bool recursive, std::string* err) {
     if (!Exists(path)) return true;
-    DWORD attr = GetFileAttributesW(path.c_str());
+    DWORD attr = GetFileAttributesW(Fix(path).c_str());
     bool isDirEntry = attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
 
     if (!isDirEntry) {
-        if (!DeleteFileW(path.c_str())) {
+        if (!DeleteFileW(Fix(path).c_str())) {
             SetErr(err, "delete file failed");
             return false;
         }
         return true;
     }
     if (!recursive) {
-        if (!RemoveDirectoryW(path.c_str())) {
+        if (!RemoveDirectoryW(Fix(path).c_str())) {
             SetErr(err, "remove directory failed");
             return false;
         }
@@ -392,7 +408,7 @@ bool Remove(const std::wstring& path, bool recursive, std::string* err) {
     // 递归：先清子项，再删自己
     WIN32_FIND_DATAW fd{};
     std::wstring mask = path + L"\\*";
-    HANDLE h = FindFirstFileExW(mask.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
+    HANDLE h = FindFirstFileExW(Fix(mask).c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
                                 FIND_FIRST_EX_LARGE_FETCH);
     if (h != INVALID_HANDLE_VALUE) {
         do {
@@ -402,10 +418,81 @@ bool Remove(const std::wstring& path, bool recursive, std::string* err) {
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
-    if (!RemoveDirectoryW(path.c_str())) {
+    if (!RemoveDirectoryW(Fix(path).c_str())) {
         SetErr(err, "remove tree failed");
         return false;
     }
+    return true;
+}
+
+bool RemoveWithRetry(const std::wstring& path, bool recursive, int retries, int delayMs, std::string* err) {
+    if (!Exists(path)) return true;
+    for (int i = 0; i <= retries; ++i) {
+        std::string e;
+        if (Remove(path, recursive, &e)) return true;
+        if (i == retries) {
+            if (err) *err = e;
+            return false;
+        }
+        // 只读属性会让删除失败；清掉再试（整棵树的只读在下一轮递归里同样会清）
+        if (!recursive) SetFileAttributesW(Fix(path).c_str(), FILE_ATTRIBUTE_NORMAL);
+        Sleep(static_cast<DWORD>(delayMs > 0 ? delayMs : 1));
+    }
+    return false;
+}
+
+bool ReplaceDirectory(const std::wstring& src, const std::wstring& dst, std::string* err) {
+    std::wstring s = Normalize(src);
+    std::wstring d = Normalize(dst);
+    if (!IsDir(s)) {
+        SetErr(err, "source is not a directory");
+        return false;
+    }
+    std::wstring parent = Parent(d);
+    if (!parent.empty() && !EnsureDir(parent, err)) return false;
+
+    std::wstring old = d + L".old";
+    if (Exists(old)) {
+        // 上一轮残留：能删就删，删不掉说明被占用，直接报错而不是硬顶
+        if (!RemoveWithRetry(old, true, 3, 100, err)) return false;
+    }
+    bool hadOld = IsDir(d);
+    if (hadOld && !MoveFileExW(Fix(d).c_str(), Fix(old).c_str(), MOVEFILE_WRITE_THROUGH)) {
+        SetErr(err, "cannot move current directory aside");
+        return false;
+    }
+    if (!MoveFileExW(Fix(s).c_str(), Fix(d).c_str(), MOVEFILE_WRITE_THROUGH)) {
+        SetErr(err, "cannot move new directory into place");
+        if (hadOld) MoveFileExW(Fix(old).c_str(), Fix(d).c_str(), MOVEFILE_WRITE_THROUGH);   // 回滚
+        return false;
+    }
+    if (hadOld) {
+        std::string ignored;
+        RemoveWithRetry(old, true, 3, 100, &ignored);   // 旧目录删不掉不算失败，留给下次清理
+    }
+    return true;
+}
+
+bool DiskSpace(const std::wstring& path, uint64_t& freeBytes, uint64_t& totalBytes, std::string* err) {
+    if (!Exists(path)) {
+        SetErr(err, "path does not exist");
+        return false;
+    }
+    ULARGE_INTEGER avail{}, total{}, free{};
+    if (!GetDiskFreeSpaceExW(Fix(path).c_str(), &avail, &total, &free)) {
+        SetErr(err, "disk space query failed");
+        return false;
+    }
+    freeBytes = static_cast<uint64_t>(free.QuadPart);
+    totalBytes = static_cast<uint64_t>(total.QuadPart);
+    return true;
+}
+
+bool DirSize(const std::wstring& dir, uint64_t& bytes, std::string* err) {
+    bytes = 0;
+    std::vector<DirEntry> entries;
+    if (!ListDir(dir, entries, ListOptions{ true, nullptr, true, false }, err)) return false;
+    for (auto& e : entries) bytes += e.size;
     return true;
 }
 
@@ -423,6 +510,18 @@ bool CreateTempFile(const std::wstring& dirHint, std::wstring& path, std::string
         return false;
     }
     path = name;
+    return true;
+}
+
+bool CreateTempDir(const std::wstring& dirHint, std::wstring& path, std::string* err) {
+    std::wstring file;
+    if (!CreateTempFile(dirHint, file, err)) return false;
+    DeleteFileW(Fix(file).c_str());
+    if (!CreateDirectoryW(Fix(file).c_str(), nullptr)) {
+        SetErr(err, "create temp dir failed");
+        return false;
+    }
+    path = file;
     return true;
 }
 

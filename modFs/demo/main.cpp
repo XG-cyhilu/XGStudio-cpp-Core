@@ -74,14 +74,50 @@ int main() {
     xgfs::Remove(dir + L"\\moved.txt", false, &err);
     printf("[5] after remove exists=%d\n", (int)xgfs::Exists(dir + L"\\moved.txt"));
 
-    // 6) 临时文件
+    // 6) 临时文件 / 临时目录
     std::wstring tmp;
     if (xgfs::CreateTempFile(dir, tmp, &err)) {
         printf("[6] temp=%ls exists=%d\n", xgfs::FileName(tmp).c_str(), (int)xgfs::Exists(tmp));
         xgfs::Remove(tmp, false, &err);
     }
+    std::wstring tmpDir;
+    if (xgfs::CreateTempDir(dir, tmpDir, &err)) {
+        printf("[6] tempdir=%ls isdir=%d\n", xgfs::FileName(tmpDir).c_str(), (int)xgfs::IsDir(tmpDir));
+        xgfs::RemoveWithRetry(tmpDir, true, 3, 50, &err);
+    }
+
+    // 7) 统计 / 容量 / 长路径
+    uint64_t total = 0;
+    bool sizeOk = xgfs::DirSize(dir, total, &err);   // 先算，printf 的参数求值顺序是不确定的
+    printf("[7] dirsize=%d bytes=%llu\n", (int)sizeOk, static_cast<unsigned long long>(total));
+    uint64_t freeB = 0, totB = 0;
+    bool diskOk = xgfs::DiskSpace(dir, freeB, totB, &err);
+    printf("[7] disk free=%.1f GB total=%.1f GB ok=%d\n", double(freeB) / 1073741824.0,
+           double(totB) / 1073741824.0, (int)diskOk);
+
+    // 构造一条 300 字符的深层路径（超过 MAX_PATH），验证长路径前缀确实生效
+    std::wstring deep = dir;
+    while (deep.size() < 300) deep += L"\\segment_0123456789";
+    deep += L"\\leaf.txt";
+    std::wstring lp = xgfs::LongPath(deep);
+    bool longOk = xgfs::WriteFileAtomic(deep, std::string("long path"), &err);
+    std::string lpText;
+    bool longRead = xgfs::ReadFile(deep, lpText, &err);
+    printf("[7] longpath len=%zu prefix=%d write=%d read=%zu\n", lp.size(), (int)lp.rfind(L"\\\\?\\") == 0, (int)longOk,
+           lpText.size());
+
+    // 8) 原子目录替换
+    std::wstring a = dir + L"\\stage_a", b = dir + L"\\target_b";
+    xgfs::EnsureDir(a, &err);
+    xgfs::WriteFile(a + L"\\v.txt", std::string("v2"), &err);
+    xgfs::EnsureDir(b, &err);
+    xgfs::WriteFile(b + L"\\v.txt", std::string("v1"), &err);
+    bool replaced = xgfs::ReplaceDirectory(a, b, &err);
+    std::string v;
+    xgfs::ReadFile(b + L"\\v.txt", v, &err);
+    printf("[8] replace=%d content=%s leftoverOld=%d\n", (int)replaced, v.c_str(), (int)xgfs::Exists(b + L".old"));
 
     xgfs::Remove(dir, true);
-    printf("[7] cleanup exists=%d\n", (int)xgfs::Exists(dir));
+    printf("[9] cleanup exists=%d\n", (int)xgfs::Exists(dir));
     return 0;
 }

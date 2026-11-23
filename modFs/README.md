@@ -2,7 +2,7 @@
 
 文件与路径工具（Windows / C++17 / 静态库 / Apache-2.0），无第三方依赖。
 
-只收那些"每个项目都重写一遍、每次都可能写错"的部分：**路径规范化、原子写、临时文件、递归遍历、安全删除**。
+只收那些"每个项目都重写一遍、每次都可能写错"的部分：**路径规范化、长路径、原子写、临时文件、递归遍历、大小统计、目录替换、安全删除**。
 
 ```cpp
 #include <xgfs/xgfs.h>
@@ -20,6 +20,9 @@ xgfs::WriteFileAtomic(L"D:\\game\\config\\options.json", text, &err);   // 要�
 | `Join` | 拼接并规范化；右值是绝对路径时直接用右值 |
 | `FileName` / `Stem` / `Extension` / `Parent` | 拆路径，`Extension` 含点 |
 | `ReplaceExtension` | 换扩展名（`ext` 带不带点都行） |
+| `LongPath` | 超过 248 字符时补 `\\?\`（UNC 转 `\\?\UNC\`），短路径原样返回绝对化结果 |
+
+**长路径**：库内部所有 `CreateFile / FindFirstFileEx / MoveFileEx / DeleteFileW / RemoveDirectoryW` 都自动套 `\\?\` 前缀，所以 `EnsureDir` / `WriteFile` / `ListDir` / `ReplaceDirectory` 直接吃超长路径就行。只有把路径交给第三方（libcurl、外部 DLL）时才需要手动 `LongPath()`。前缀只在 ≥248 字符时加——因为 `\\?\` 会关掉 Win32 的路径归一化（`.`、`..`、`/` 全部失效），无脑加反而会让短路径行为变味。
 
 ## 读写
 
@@ -35,6 +38,21 @@ xgfs::WriteFileAtomic(L"D:\\game\\config\\options.json", text, &err);   // 要�
 ## 移动 / 复制 / 删除
 
 `Move`（跨卷也可，`MoveFileEx` + `WRITE_THROUGH`）、`Copy`（可选覆盖）、`Remove`（`recursive` 时先清子项再删自己）。三者都会自动创建目标父目录。
+
+| 接口 | 说明 |
+| --- | --- |
+| `RemoveWithRetry(path, recursive, retries=5, delayMs=120)` | 删除失败先清只读属性再重试。被杀软/索引器/刚写完的文件短暂占用是 Windows 常态，一次 `DeleteFileW` 失败就报错让上层很痛苦 |
+| `ReplaceDirectory(src, dst)` | 原子式目录替换：`dst→dst.old` → `src→dst` → 删 `dst.old`；第二步失败会把 `dst.old` 移回去。解压/更新场景用它，避免"旧的删了新的没进来" |
+
+`ReplaceDirectory` 的 `src` 与 `dst` 必须在同一个卷上（rename 语义，跨卷会直接失败），要跨卷就先 `Copy` 到目标卷的临时目录再替换。
+
+## 查询与统计
+
+| 接口 | 说明 |
+| --- | --- |
+| `DirSize(dir, bytes)` | 递归累加普通文件大小（不跟进 reparse point） |
+| `DiskSpace(path, free, total)` | 所在卷的可用/总容量，`GetDiskFreeSpaceExW` 封装。下载前判断空间够不够 |
+| `CreateTempDir(dirHint, path)` | 唯一目录名并立即创建 |
 
 ## 遍历
 
@@ -59,6 +77,11 @@ xgfs::ListDir(L"D:\\game", out, opt, &err);
 | 递归遍历 9 项 + `*.json` 过滤 | 数量与名字正确 |
 | 复制 → 移动 → 删除 | 全成功，删除后 `Exists` 为 0 |
 | 临时文件 | `xgtXXXX.tmp` 生成并在指定目录 |
+| 临时目录 | 唯一目录名，`IsDir=1` |
+| `DirSize` | 34 字节（12 + 7 + 15，与写入量一致） |
+| `DiskSpace` | 74.3 GB 可用 / 280.0 GB 总容量 |
+| 324 字符长路径写 + 读 | 写入 9 字节并读回，`\\?\` 前缀生效 |
+| `ReplaceDirectory` | 目标目录内容换成 `v2`，`target_b.old` 无残留 |
 | `Remove(recursive)` | 整个测试目录清空 |
 
 ## 构建
