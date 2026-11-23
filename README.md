@@ -19,6 +19,7 @@ Apache-2.0 许可与构建约定（C++17、MSVC `/utf-8`、UTF-8 BOM 源码、CM
 | `modCfg/` | XGCFG | `XGCFG::xgcfg` | JSON 值树与配置文件：宽松解析（注释/尾逗号）、保持插入顺序的对象、点路径读写、默认值、原子保存、mtime 变更检测与重载 |
 | `modThread/` | XGTHREAD | `XGTHREAD::xgthread` | 线程池（future / fire-and-forget / WaitIdle）与主线程调度队列（任意线程 Post、拥有者线程 RunPending） |
 | `modNet/` | XGNET | `XGNET::xgnet` | 同步 HTTP 客户端（libcurl easy + 连接复用）：请求头/体、重定向、超时、代理、状态码与响应头；安装时自带静态 libcurl |
+| `modSecure/` | XGSECURE | `XGSECURE::xgsecure` | 编解码与密钥材料（CNG）：Base64 / Base64Url、密码学随机、HMAC-SHA256、AES-256-GCM 密封、PBKDF2-HMAC-SHA256 |
 
 后续模块在此表登记。
 
@@ -40,14 +41,14 @@ cmake --build .build --config Release
 ```cmake
 add_subdirectory(third_party/cpploclib)
 target_link_libraries(YourApp PRIVATE XGDL::xgdl XGLOG::xglog XGPROC::xgproc
-                                        XGCRYPTO::xgcrypto XGZIP::xgzip XGFS::xgfs
-                                        XGCFG::xgcfg XGTHREAD::xgthread XGNET::xgnet)
+                                        XGCRYPTO::xgcrypto XGSECURE::xgsecure XGZIP::xgzip
+                                        XGFS::xgfs XGCFG::xgcfg XGTHREAD::xgthread XGNET::xgnet)
 ```
 
 按需关掉不需要的模块：`-DCPPLOCLIB_BUILD_LOG=OFF`、`-DCPPLOCLIB_BUILD_PROC=OFF`、
-`-DCPPLOCLIB_BUILD_CRYPTO=OFF`、`-DCPPLOCLIB_BUILD_ZIP=OFF`、`-DCPPLOCLIB_BUILD_FS=OFF`、
-`-DCPPLOCLIB_BUILD_CFG=OFF`、`-DCPPLOCLIB_BUILD_THREAD=OFF`、`-DCPPLOCLIB_BUILD_NET=OFF`，
-或者只加某一个模块：`add_subdirectory(third_party/cpploclib/modDownload)`，效果相同。
+`-DCPPLOCLIB_BUILD_CRYPTO=OFF`、`-DCPPLOCLIB_BUILD_SECURE=OFF`、`-DCPPLOCLIB_BUILD_ZIP=OFF`、
+`-DCPPLOCLIB_BUILD_FS=OFF`、`-DCPPLOCLIB_BUILD_CFG=OFF`、`-DCPPLOCLIB_BUILD_THREAD=OFF`、
+`-DCPPLOCLIB_BUILD_NET=OFF`，或者只加某一个模块：`add_subdirectory(third_party/cpploclib/modSecure)`，效果相同。
 
 ## 许可
 
