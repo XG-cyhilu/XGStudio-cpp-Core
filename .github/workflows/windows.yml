@@ -13,34 +13,39 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     env:
-      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}\vcpkg-cache,readwrite"
+      # Local binary cache so repeated runs do not rebuild curl/openssl from source.
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
 
     steps:
       - uses: actions/checkout@v4
 
-      # libcurl（静态、schannel）由 vcpkg 清单模式装进 .build/vcpkg_installed。
-      # 缓存二进制包，避免每次重编 curl。
+      # Puts cl.exe / link.exe / ninja-friendly env in PATH regardless of which
+      # VS major version the runner image currently ships.
+      - uses: ilammy/msvc-dev-cmd@v1
+
       - name: Cache vcpkg binaries
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}\vcpkg-cache
+          path: ${{ github.workspace }}/vcpkg-cache
           key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
 
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B .build -G "Visual Studio 17 2022" -A x64 `
+          cmake -S . -B .build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
             -DCPPLOCLIB_BUILD_TESTS=ON
 
       - name: Build
         shell: pwsh
-        run: cmake --build .build --config Release --parallel
+        run: cmake --build .build --parallel
 
       - name: Test
         shell: pwsh
-        run: ctest --test-dir .build -C Release --output-on-failure --timeout 180
+        run: ctest --test-dir .build --output-on-failure --timeout 180
