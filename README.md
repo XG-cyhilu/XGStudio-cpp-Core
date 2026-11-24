@@ -20,6 +20,8 @@ Apache-2.0 许可与构建约定（C++17、MSVC `/utf-8`、UTF-8 BOM 源码、CM
 | `modThread/` | XGTHREAD | `XGTHREAD::xgthread` | 线程池（future / fire-and-forget / WaitIdle）与主线程调度队列（任意线程 Post、拥有者线程 RunPending） |
 | `modNet/` | XGNET | `XGNET::xgnet` | 同步 HTTP 客户端（libcurl easy + 连接复用）：请求头/体、重定向、超时、代理、状态码与响应头；安装时自带静态 libcurl |
 | `modSecure/` | XGSECURE | `XGSECURE::xgsecure` | 编解码与密钥材料（CNG）：Base64 / Base64Url、密码学随机、HMAC-SHA256、AES-256-GCM 密封、PBKDF2-HMAC-SHA256 |
+| `modShell/` | XGSHELL | `XGSHELL::xgshell` | Windows 桌面壳集成：单实例互斥 + 激活已有窗口、协议/文件关联（HKCU）、IShellLink 快捷方式、开机自启、托盘、已知文件夹、资源管理器动作、提权重启 |
+| `modCrash/` | XGCRASH | `XGCRASH::xgcrash` | 崩溃转储：SEH / `std::terminate` / 可选 VEH 三路汇到 `MiniDumpWriteDump`，固定目录 + 保留最近 N 个 + 写完回调 |
 
 后续模块在此表登记。
 
@@ -42,13 +44,15 @@ cmake --build .build --config Release
 add_subdirectory(third_party/cpploclib)
 target_link_libraries(YourApp PRIVATE XGDL::xgdl XGLOG::xglog XGPROC::xgproc
                                         XGCRYPTO::xgcrypto XGSECURE::xgsecure XGZIP::xgzip
-                                        XGFS::xgfs XGCFG::xgcfg XGTHREAD::xgthread XGNET::xgnet)
+                                        XGFS::xgfs XGCFG::xgcfg XGTHREAD::xgthread XGNET::xgnet
+                                        XGSHELL::xgshell XGCRASH::xgcrash)
 ```
 
 按需关掉不需要的模块：`-DCPPLOCLIB_BUILD_LOG=OFF`、`-DCPPLOCLIB_BUILD_PROC=OFF`、
 `-DCPPLOCLIB_BUILD_CRYPTO=OFF`、`-DCPPLOCLIB_BUILD_SECURE=OFF`、`-DCPPLOCLIB_BUILD_ZIP=OFF`、
 `-DCPPLOCLIB_BUILD_FS=OFF`、`-DCPPLOCLIB_BUILD_CFG=OFF`、`-DCPPLOCLIB_BUILD_THREAD=OFF`、
-`-DCPPLOCLIB_BUILD_NET=OFF`，或者只加某一个模块：`add_subdirectory(third_party/cpploclib/modSecure)`，效果相同。
+`-DCPPLOCLIB_BUILD_NET=OFF`、`-DCPPLOCLIB_BUILD_SHELL=OFF`、`-DCPPLOCLIB_BUILD_CRASH=OFF`，
+或者只加某一个模块：`add_subdirectory(third_party/cpploclib/modSecure)`，效果相同。
 
 ## 许可
 
