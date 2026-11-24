@@ -71,9 +71,12 @@ target_include_directories(xgnet PUBLIC
     PRIVATE ${CURL_INCLUDE_DIR})
 target_compile_definitions(xgnet PRIVATE CURL_STATICLIB UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 target_compile_options(xgnet PRIVATE /utf-8 /W3)
+# CURL_LIBRARY 在本地是 .lib 路径、在 vcpkg 下是 CURL::libcurl 目标名。
+# 两种都直接进 PUBLIC 链接（导出时写名字，消费端由 find_dependency(CURL) 解析），
+# 不要包 $<BUILD_INTERFACE>/<INSTALL_INTERFACE>：vcpkg 的 curl 接口里带
+# $<LINK_ONLY:...> 依赖，套进 genex 会在 generate 阶段被判成"非法上下文"。
 target_link_libraries(xgnet PUBLIC
-    $<BUILD_INTERFACE:${CURL_LIBRARY}>
-    $<INSTALL_INTERFACE:CURL::libcurl>
+    ${CURL_LIBRARY}
     bcrypt ws2_32 crypt32 secur32 wldap32)
 set_target_properties(xgnet PROPERTIES DEBUG_POSTFIX d)
 

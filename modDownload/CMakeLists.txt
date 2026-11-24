@@ -60,10 +60,12 @@ target_include_directories(xgdl PUBLIC
     PRIVATE src ${CURL_INCLUDE_DIR})
 target_compile_definitions(xgdl PRIVATE CURL_STATICLIB UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 target_compile_options(xgdl PRIVATE /utf-8 /W3)
-# 静态 libcurl（Schannel 后端）需要的系统库
+# 静态 libcurl（Schannel 后端）需要的系统库。
+# CURL_LIBRARY 在本地是 .lib 路径、在 vcpkg 下是 CURL::libcurl 目标名；直接进 PUBLIC，
+# 不包 $<BUILD_INTERFACE>/<INSTALL_INTERFACE>——vcpkg 的 curl 接口自带 $<LINK_ONLY:...>，
+# 套进 genex 会在 generate 阶段报"may only be used for linking"。
 target_link_libraries(xgdl PUBLIC
-    $<BUILD_INTERFACE:${CURL_LIBRARY}>
-    $<INSTALL_INTERFACE:CURL::libcurl>
+    ${CURL_LIBRARY}
     bcrypt ws2_32 crypt32 secur32 wldap32)
 set_target_properties(xgdl PROPERTIES DEBUG_POSTFIX d)
 
