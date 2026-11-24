@@ -39,6 +39,7 @@ option(CPPLOCLIB_BUILD_NET "Build the XGNET http client module" ON)
 option(CPPLOCLIB_BUILD_SECURE "Build the XGSECURE encoding/crypto module" ON)
 option(CPPLOCLIB_BUILD_SHELL "Build the XGSHELL Windows shell integration module" ON)
 option(CPPLOCLIB_BUILD_CRASH "Build the XGCRASH minidump module" ON)
+option(CPPLOCLIB_BUILD_CORE "Build the XGCORE umbrella header / version module" ON)
 option(CPPLOCLIB_BUILD_DEMOS "Build module demos" ON)
 
 if (CPPLOCLIB_BUILD_DOWNLOAD)
@@ -99,4 +100,10 @@ endif()
 if (CPPLOCLIB_BUILD_CRASH)
     set(XGCRASH_BUILD_DEMO ${CPPLOCLIB_BUILD_DEMOS} CACHE BOOL "" FORCE)
     add_subdirectory(modCrash)
+endif()
+
+# XGCORE 必须最后加：它按"已经存在的目标"决定要链哪些模块
+if (CPPLOCLIB_BUILD_CORE)
+    set(XGCORE_BUILD_DEMO ${CPPLOCLIB_BUILD_DEMOS} CACHE BOOL "" FORCE)
+    add_subdirectory(modCore)
 endif()
