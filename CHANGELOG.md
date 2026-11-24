@@ -40,8 +40,16 @@
 - XGNET：确认仓库自带的静态 libcurl 编的是 `CURL_ZLIB=OFF / HTTP_ONLY=ON`，不会自动解 gzip →
   改由库自己 gunzip，README 原"没开压缩"的说明同步修正。
 
+### 新增
+
+- **ctest 套件**：`tests/` 下每个模块一条用例（`-DCPPLOCLIB_BUILD_TESTS=ON` 开启），
+  全都不出网 —— 网络相关只打 127.0.0.1；XGDL 直接复用 demo 里的 `--selfcheck`。
+  本机 13 条全绿，耗时约 17 秒。
+- **GitHub Actions**：`.github/workflows/windows.yml`（`windows-latest` + VS2022 + vcpkg 静态 libcurl，
+  二进制包缓存），push / PR / 手动触发都跑 configure → build → ctest。
+
 ### 未做（刻意的）
 
 - 不自更新模块、不做安装任务图、不做目录监控 —— 需要产品形态才能定，属上层领域逻辑。
 - 不做证书/签名解析 —— 静态 libcurl 已走 schannel，证书校验交给系统。
-- 无 ctest / CI —— 目前每个模块靠 `demo` 里的自检用例兜底，`--selfcheck` 全绿才算过。
+- 不引 gtest —— 每个用例自带 20 行断言头，省一个依赖，也省一次 `FetchContent`。

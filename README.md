@@ -60,6 +60,39 @@ target_link_libraries(YourApp PRIVATE XGDL::xgdl XGLOG::xglog XGPROC::xgproc
 `-DCPPLOCLIB_BUILD_NET=OFF`、`-DCPPLOCLIB_BUILD_SHELL=OFF`、`-DCPPLOCLIB_BUILD_CRASH=OFF`、
 `-DCPPLOCLIB_BUILD_CORE=OFF`，或者只加某一个模块：`add_subdirectory(third_party/cpploclib/modSecure)`，效果相同。
 
+## 测试
+
+```powershell
+cmake -S . -B .build -DCPPLOCLIB_BUILD_TESTS=ON
+cmake --build .build --config Release
+ctest --test-dir .build -C Release --output-on-failure
+```
+
+每个模块一条 ctest（`tests/<模块>/main.cpp`，自带微型断言，不引 gtest）：
+
+| 用例 | 覆盖 |
+| --- | --- |
+| `xgt_cfg` | 宽松解析/往返、点路径写、脏标记、变更回调、`Merge` 深浅两种、`Binder` 拉取与推送 |
+| `xgt_fs` | 原子写读回、路径拆分、目录大小、磁盘空间、复制/删除 |
+| `xgt_log` | 初始化幂等、分级过滤、`UiPoll` 拉取、`Dropped`=0、文件真落盘 |
+| `xgt_crypto` | MD5/SHA1/SHA256/SHA512 标准向量、增量==一次性、十六进制往返与非法输入 |
+| `xgt_secure` | Base64/Base64Url 往返、HMAC 已知向量、AES-GCM 密封 + 篡改/AAD/换密钥检测、PBKDF2 确定性 |
+| `xgt_thread` | 线程池 Submit/Post/WaitIdle/关闭、CancelToken 父子关系、MainQueue 执行时机 |
+| `xgt_zip` | CRC32 标准值、store/deflate 双路径写入 + 逐字节回读、目录条目、路径穿越拒绝、解包到磁盘 |
+| `xgt_shell` | `QuoteArg` ↔ `ParseCommandLine` 往返（空格/引号/结尾反斜杠/CJK）、已知文件夹 |
+| `xgt_proc` | stdout/stderr 分路捕获、退出码、环境变量注入、长任务 `Stop()` |
+| `xgt_crash` | 真实 dump 落盘（>4KB）、同秒不覆盖、`PruneDumps` 保留数 |
+| `xgt_net` | 百分号/query 编解码、`HasHeader`/`Response::Header`、自建回环 HTTP 服务上的真实请求 |
+| `xgt_core` | 聚合头单 TU 编译、版本与模块清单、跨模块 parse→写盘→读回→哈希 |
+| `xgt_download_selfcheck` | 直接复用 `xgdl_demo --selfcheck`（镜像回退/续传/校验/分块，自带回环服务） |
+
+全部用例**不出网**（网络相关只用 127.0.0.1），可在无外网的 CI 上稳定跑。
+
+## 持续集成
+
+`.github/workflows/windows.yml`：`windows-latest` + VS2022，vcpkg 清单模式装静态 libcurl（二进制缓存
+命中 `vcpkg-cache`），然后 configure → build → `ctest`，任一用例失败即红。
+
 ## 许可
 
 Apache License 2.0，全文见 [LICENSE](LICENSE)。每个源文件头部都带 SPDX 标识。

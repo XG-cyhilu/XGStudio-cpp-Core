@@ -41,6 +41,7 @@ option(CPPLOCLIB_BUILD_SHELL "Build the XGSHELL Windows shell integration module
 option(CPPLOCLIB_BUILD_CRASH "Build the XGCRASH minidump module" ON)
 option(CPPLOCLIB_BUILD_CORE "Build the XGCORE umbrella header / version module" ON)
 option(CPPLOCLIB_BUILD_DEMOS "Build module demos" ON)
+option(CPPLOCLIB_BUILD_TESTS "Register the ctest suites (needs -DCPPLOCLIB_BUILD_DEMOS=ON only for the XGDL selfcheck)" OFF)
 
 if (CPPLOCLIB_BUILD_DOWNLOAD)
     set(XGDL_BUILD_DEMO ${CPPLOCLIB_BUILD_DEMOS} CACHE BOOL "" FORCE)
@@ -106,4 +107,10 @@ endif()
 if (CPPLOCLIB_BUILD_CORE)
     set(XGCORE_BUILD_DEMO ${CPPLOCLIB_BUILD_DEMOS} CACHE BOOL "" FORCE)
     add_subdirectory(modCore)
+endif()
+
+# ctest 放在最后：同样按已存在的目标决定注册哪些用例
+if (CPPLOCLIB_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
