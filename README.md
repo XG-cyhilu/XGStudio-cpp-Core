@@ -18,7 +18,7 @@ Apache-2.0 许可与构建约定（C++17、MSVC `/utf-8`、UTF-8 BOM 源码、CM
 | `modFs/` | XGFS | `XGFS::xgfs` | 文件与路径：规范化/拆分、原子写、临时文件、递归遍历（通配过滤）、复制/移动/安全删除 |
 | `modCfg/` | XGCFG | `XGCFG::xgcfg` | JSON 值树与配置文件：宽松解析（注释/尾逗号）、保持插入顺序的对象、点路径读写、默认值、原子保存、mtime 变更检测与重载 |
 | `modThread/` | XGTHREAD | `XGTHREAD::xgthread` | 线程池（future / fire-and-forget / WaitIdle）与主线程调度队列（任意线程 Post、拥有者线程 RunPending） |
-| `modNet/` | XGNET | `XGNET::xgnet` | 同步 HTTP 客户端（libcurl easy + 连接复用）：请求头/体、重定向、超时、代理、状态码与响应头；安装时自带静态 libcurl |
+| `modNet/` | XGNET | `XGNET::xgnet` | 同步 HTTP 客户端（libcurl easy + 连接复用）：请求头/体、重定向、超时、代理（含系统代理探测）、状态码与响应头、内置 gunzip、URL/query 编解码、cookie jar；安装时自带静态 libcurl |
 | `modSecure/` | XGSECURE | `XGSECURE::xgsecure` | 编解码与密钥材料（CNG）：Base64 / Base64Url、密码学随机、HMAC-SHA256、AES-256-GCM 密封、PBKDF2-HMAC-SHA256 |
 | `modShell/` | XGSHELL | `XGSHELL::xgshell` | Windows 桌面壳集成：单实例互斥 + 激活已有窗口、协议/文件关联（HKCU）、IShellLink 快捷方式、开机自启、托盘、已知文件夹、资源管理器动作、提权重启 |
 | `modCrash/` | XGCRASH | `XGCRASH::xgcrash` | 崩溃转储：SEH / `std::terminate` / 可选 VEH 三路汇到 `MiniDumpWriteDump`，固定目录 + 保留最近 N 个 + 写完回调 |

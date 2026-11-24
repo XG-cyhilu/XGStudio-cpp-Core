@@ -61,7 +61,7 @@ if (NOT CURL_LIBRARY)
     set(CURL_LIBRARY ${CURL_LIBRARIES})
 endif()
 
-add_library(xgnet STATIC src/xgnet.cpp)
+add_library(xgnet STATIC src/xgnet.cpp src/gzip.cpp)
 add_library(XGNET::xgnet ALIAS xgnet)
 
 target_compile_features(xgnet PUBLIC cxx_std_17)

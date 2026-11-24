@@ -41,30 +41,62 @@ if (client.Get("https://registry.npmmirror.com/typescript/latest", res) && res.I
 | `timeoutMs` | 30000 | 整次请求；`0` = 不限 |
 | `followRedirects` / `maxRedirects` | true / 5 | 3xx 跟随 |
 | `verifyPeer` | true | 关掉等于不校验证书，只给调试用 |
-| `proxy` | 空 | 例如 `http://127.0.0.1:7890` |
+| `proxy` | 空 | 例如 `http://127.0.0.1:7890`；空且 `useSystemProxy` 时读系统设置 |
+| `useSystemProxy` | true | 读 HKCU Internet 设置里的 ProxyEnable / ProxyServer |
+| `acceptGzip` | true | 发 `Accept-Encoding: gzip`，响应由本库 gunzip（CRC + ISIZE 校验） |
+| `cookieFile` | 空 | 该请求单独使用的 cookie jar 文件；空则用 `Client::SetCookieFile` 设的 |
 | `userAgent` | `XGNet/1.0` | |
 
 ### Response
 
-`status / body / headers / effectiveUrl / totalSec / received / error`，外加 `TransportOk()`、`IsSuccess()`、`Header(name, out)`（大小写不敏感）。
+`status / body / headers / effectiveUrl / totalSec / received / decompressed / error`，外加
+`TransportOk()`、`IsSuccess()`、`Header(name, out)`（大小写不敏感）。
 
 **状态码语义**：能连上就是 `true`，`status=404` 也是 `true`；连不上（DNS、TLS、超时）返回 `false` 且 `status=0`、`error` 是 curl 的错误描述。这样调用方可以分别处理"服务器拒绝"和"网络没通"。
 
-## TLS 的两个坑
+### 工具函数
+
+| 接口 | 说明 |
+| --- | --- |
+| `SystemProxy(&pac)` | 读 `HKCU\...\Internet Settings`：`ProxyEnable=1` 时返回 `ProxyServer`（按协议列出时优先 https，其次 http）；`pac` 回填 AutoConfigURL（本库不执行 PAC，只报告） |
+| `UrlEncode / UrlDecode` | 百分号编解码；保留 `A-Za-z0-9-_.~`，空格编成 `%20`（不是 `+`） |
+| `QueryEncode(pairs)` | 组装 `a=1&b=x%20y` |
+| `QueryDecode(q)` | 解析成有序 pair；同名参数保留多份；`'+'` 当空格（表单口径） |
+| `Client::SetCookieFile / DumpCookies / ClearCookies` | cookie jar 读写与导出（Netscape 文本格式） |
+
+### cookie jar
+
+```cpp
+xgnet::Client c;
+c.SetCookieFile("cookies.txt");            // CURLOPT_COOKIEFILE + COOKIEJAR
+c.Get("https://site/login", res);          // 服务端 Set-Cookie 会被记住并落盘
+for (auto& line : c.DumpCookies()) { ... } // domain\tflag\tpath\tsecure\texpiry\tname\tvalue
+c.ClearCookies();
+```
+
+cookie 引擎是内存表 + 文件落盘：一个 `Client` 内跨请求共享，进程重启后由文件恢复。
+
+## TLS 与压缩
 
 - 静态 libcurl 走 Schannel（不依赖 OpenSSL）。Schannel 的**严格证书吊销检查**在部分网络环境下会把正常证书判死，报 `SSL connect error`。库里设了 `CURLSSLOPT_REVOKE_BEST_EFFORT`：**只降级吊销检查，不关证书校验**。
-- 没开压缩（这份 libcurl 没链 zlib），所以也不会自动发 `Accept-Encoding`。要 gzip 响应得自己链 zlib 并开 `CURLOPT_ACCEPT_ENCODING`。
+- 这份静态 libcurl 没链 zlib，自己不会解压。所以 `acceptGzip`（默认开）时由库发 `Accept-Encoding: gzip`，
+  收到 `Content-Encoding: gzip` 后用**内置 gunzip**（逐位规范 Huffman + 32KB 窗口，校验 CRC32 与 ISIZE）
+  解出明文，`Response::decompressed` 标记是否解过。`br` / `zstd` 不声明也就不可能收到。
+- cookie 引擎在 `easy_reset` 后会保留（curl 的 cookie 表是句柄级的），这也是 `Client` 复用同一 handle 的原因之一。
 
 ## 实测（`xgnet_demo.exe`）
 
 | 项 | 结果 |
 | --- | --- |
 | HTTPS GET `registry.npmmirror.com/typescript/latest` | `200`、7817 字节、`Content-Type: application/json; charset=utf-8` |
-| 同 Client 第二次请求 | `200`，`0.018s` vs 首次 `0.183s`（连接+TLS 复用明显） |
+| 同 Client 第二次请求 | `200`，`0.016s` vs 首次 `0.32s`（连接+TLS 复用明显） |
 | 404 | 传输成功、`status=404` |
 | POST JSON 到 `postman-echo.com/post` | `200`，body 里回显 `"probe":true`（确认 body 与 Content-Type 真的发出去了） |
 | `10.255.255.1` + 600ms 连接超时 | `ok=0 status=0 err=Timeout was reached` |
 | 非 http(s) URL | `ok=0 err=only http/https urls are supported` |
+| URL / query 编解码 | 中文与 `& = / 空格` 往返一致；`q=hello%20world&lang=…&empty=&q=second` 解析出 5 对（含重复键） |
+| gzip 响应（`registry.npmmirror.com/react`） | `200`、`Content-Encoding: gzip`、`decompressed=1`、body 6.92MB 明文 JSON（压缩态约 1.3MB） |
+| cookie jar（`httpbin.org/cookies/set?probe=xgnet`） | `200`、`jar=1`、跟随跳转后回显 `probe=xgnet` |
 
 > demo 里踩过一个坑：`printf("%d %s", Perform(...), res.error.c_str())` 这种把"有副作用的调用"和"它的结果"写进同一组参数的写法，参数求值顺序未定义，MSVC 下会先读出未初始化的字符串。已改成先调用再打印。
 
