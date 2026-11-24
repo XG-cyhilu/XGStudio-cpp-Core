@@ -45,8 +45,10 @@
 - **ctest 套件**：`tests/` 下每个模块一条用例（`-DCPPLOCLIB_BUILD_TESTS=ON` 开启），
   全都不出网 —— 网络相关只打 127.0.0.1；XGDL 直接复用 demo 里的 `--selfcheck`。
   本机 13 条全绿，耗时约 17 秒。
-- **GitHub Actions**：`.github/workflows/windows.yml`（`windows-latest` + VS2022 + vcpkg 静态 libcurl，
-  二进制包缓存），push / PR / 手动触发都跑 configure → build → ctest。
+- **GitHub Actions**：`.github/workflows/windows.yml`（`windows-latest`，不指定生成器，
+  configure → build → `ctest`，约 50 秒）。CI 范围是 11 个不依赖外部的模块：XGDL / XGNET 需要静态
+  libcurl，vcpkg 的 curl 包接口带 `$<LINK_ONLY:...>`、CMake 4.x 生成导出文件时会报错，因此这两者的
+  回归留在本地 `--selfcheck` / demo。已在 README 中写明。
 
 ### 未做（刻意的）
 

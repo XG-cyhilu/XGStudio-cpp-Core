@@ -90,8 +90,16 @@ ctest --test-dir .build -C Release --output-on-failure
 
 ## 持续集成
 
-`.github/workflows/windows.yml`：`windows-latest` + VS2022，vcpkg 清单模式装静态 libcurl（二进制缓存
-命中 `vcpkg-cache`），然后 configure → build → `ctest`，任一用例失败即红。
+`.github/workflows/windows.yml`：`windows-latest`（不指定生成器，跟着镜像用装好的 VS），
+configure → build → `ctest`，任一用例失败即红，整轮约 50 秒。
+
+CI **刻意不含 XGDL / XGNET**（配置时 `-DCPPLOCLIB_BUILD_DOWNLOAD=OFF -DCPPLOCLIB_BUILD_NET=OFF`）：
+
+- 两者都要一份**静态 libcurl**，仓库不自带；CI 上要么每次从源码编 curl，要么用 vcpkg，
+  而 vcpkg 的 curl CMake 包会在接口里塞 `$<LINK_ONLY:...>` 依赖，CMake 4.x 在生成
+  `install(EXPORT)` 时会直接判为非法上下文（`$<LINK_ONLY:...> may only be used for linking`）。
+- 它们的回归在本地做：`xgdl_demo --selfcheck`（自带回环服务，四组用例）+ `xgnet_demo`
+  的编码/代理/gzip/cookie 用例，见各自 README 的实测表。
 
 ## 许可
 
