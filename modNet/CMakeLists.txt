@@ -73,7 +73,7 @@ target_compile_definitions(xgnet PRIVATE CURL_STATICLIB UNICODE _UNICODE NOMINMA
 target_compile_options(xgnet PRIVATE /utf-8 /W3)
 target_link_libraries(xgnet PUBLIC
     $<BUILD_INTERFACE:${CURL_LIBRARY}>
-    $<INSTALL_INTERFACE:$<LINK_ONLY:CURL::libcurl>>
+    $<INSTALL_INTERFACE:CURL::libcurl>
     bcrypt ws2_32 crypt32 secur32 wldap32)
 set_target_properties(xgnet PROPERTIES DEBUG_POSTFIX d)
 

@@ -63,7 +63,7 @@ target_compile_options(xgdl PRIVATE /utf-8 /W3)
 # 静态 libcurl（Schannel 后端）需要的系统库
 target_link_libraries(xgdl PUBLIC
     $<BUILD_INTERFACE:${CURL_LIBRARY}>
-    $<INSTALL_INTERFACE:$<LINK_ONLY:CURL::libcurl>>
+    $<INSTALL_INTERFACE:CURL::libcurl>
     bcrypt ws2_32 crypt32 secur32 wldap32)
 set_target_properties(xgdl PROPERTIES DEBUG_POSTFIX d)
 
