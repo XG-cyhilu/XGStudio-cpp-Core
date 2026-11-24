@@ -21,14 +21,14 @@ endif()
 
 set(XGZIP_VERSION 1.0.0)
 
-# XGZIP —— zip 读取与解压（自带 deflate 解码，无第三方依赖）
+# XGZIP —— zip 读取、解压与写入（自带 deflate 编解码，无第三方依赖）
 #
 # 选项：
 #   XGZIP_BUILD_DEMO  构建命令行示例（默认开）
 
 option(XGZIP_BUILD_DEMO "Build the XGZIP demo" ON)
 
-add_library(xgzip STATIC src/xgzip.cpp src/inflate.cpp)
+add_library(xgzip STATIC src/xgzip.cpp src/inflate.cpp src/deflate.cpp src/ZipWrite.cpp)
 add_library(XGZIP::xgzip ALIAS xgzip)
 
 target_compile_features(xgzip PUBLIC cxx_std_17)

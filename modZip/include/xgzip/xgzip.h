@@ -18,13 +18,16 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
-// XGZIP —— zip 读取与解压（Windows / C++17 / 无第三方依赖）
+// XGZIP —— zip 读取、解压与写入（Windows / C++17 / 无第三方依赖）
 //
-// 只做解：列目录、读单个条目、整包解到目录。
-// deflate 解压是库内自带的原始实现（store / fixed / dynamic 三种块），不链 zlib。
+// 解压：列目录、读单个条目、整包解到目录。deflate 解压是库内自带的原始实现
+// （store / fixed / dynamic 三种块），不链 zlib。
+// 写入：Store（原样打包）或 Deflate（自带固定 Huffman 压缩器），支持从磁盘文件、
+// 内存缓冲和目录条目组装新包；先写 `<zip>.tmp`，成功后一步改名，失败不留半成品。
 //
 // 安全口径：条目路径先做规范化，`..`、绝对路径、盘符一律拒绝，不会写出目标目录。
 
@@ -83,5 +86,47 @@ bool ReadEntry(const std::wstring& zipPath, const std::wstring& name, std::vecto
 
 // 标准 CRC-32（zip 用的那个多项式），seed 传 0
 uint32_t Crc32(uint32_t seed, const void* data, size_t len);
+
+// ---------------- 写入 ----------------
+
+enum class WriteMethod {
+    Store,      // 不压缩，流式复制（内存占用恒定，适合大文件）
+    Deflate,    // 固定 Huffman 压缩；条目会先在内存里压完再写，单条大小受内存限制
+};
+
+struct WriteOptions {
+    WriteMethod method = WriteMethod::Store;
+    int effort = 6;             // Deflate 的搜索强度 1..9
+    bool preserveMtime = true;  // 从磁盘文件取修改时间写进条目的 DOS 时间
+    bool utf8Names = true;      // 条目名按 UTF-8 存（写通用标志位 0x0800）
+};
+
+// 顺序写一个新 zip。典型用法：
+//   Writer w(path); w.Begin(err); w.AddFile(L"a\\b.txt", disk, err); w.Commit(err);
+class Writer {
+public:
+    explicit Writer(const std::wstring& zipPath, const WriteOptions& opt = WriteOptions{});
+    ~Writer();
+    Writer(const Writer&) = delete;
+    Writer& operator=(const Writer&) = delete;
+
+    bool Begin(std::string& err);
+    // archiveName 里的 '/' 和 '\\' 都会存成 '/'，做基本规范化（拒绝 .. 与盘符）
+    bool AddFile(const std::wstring& archiveName, const std::wstring& diskPath, std::string& err);
+    bool AddMemory(const std::wstring& archiveName, const void* data, size_t len, std::string& err);
+    bool AddDirectory(const std::wstring& archiveName, std::string& err);
+
+    // 写中央目录并改名到最终路径
+    bool Commit(std::string& err);
+    // 放弃：删掉临时文件
+    void Abort();
+
+    uint64_t BytesWritten() const;
+    uint32_t EntriesWritten() const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 } // namespace xgzip

@@ -14,7 +14,7 @@ Apache-2.0 许可与构建约定（C++17、MSVC `/utf-8`、UTF-8 BOM 源码、CM
 | `modLog/` | XGLOG | `XGLOG::xglog` | 异步日志：固定内存环形队列、队列满即丢并计数、分级过滤、文件轮转、控制台着色、UI 轮询拉取 |
 | `modProc/` | XGPROC | `XGPROC::xgproc` | 通用子进程：Job 对象托管整棵进程树、stdout/stderr 按行回收、轮询取行、stdin 写入、超时与退出码、OEM/UTF-8 自动转码 |
 | `modCrypto/` | XGCRYPTO | `XGCRYPTO::xgcrypto` | 摘要计算：MD5/SHA1/SHA256/SHA384/SHA512 的增量与一次性接口、文件哈希、CRC 校验配套的定长比较（CNG 实现） |
-| `modZip/` | XGZIP | `XGZIP::xgzip` | zip 读取与解压：中央目录/ZIP64 解析、自带 inflate（store/fixed/dynamic）、filter 过滤、CRC+size 校验、路径穿越防护、atomic 进度 |
+| `modZip/` | XGZIP | `XGZIP::xgzip` | zip 读取、解压与写入：中央目录/ZIP64 解析、自带 inflate（store/fixed/dynamic）、filter 过滤、CRC+size 校验、路径穿越防护、atomic 进度；写入端支持 store / 固定 Huffman deflate、目录条目、`.tmp` 原子提交 |
 | `modFs/` | XGFS | `XGFS::xgfs` | 文件与路径：规范化/拆分、原子写、临时文件、递归遍历（通配过滤）、复制/移动/安全删除 |
 | `modCfg/` | XGCFG | `XGCFG::xgcfg` | JSON 值树与配置文件：宽松解析（注释/尾逗号）、保持插入顺序的对象、点路径读写、默认值、原子保存、mtime 变更检测与重载 |
 | `modThread/` | XGTHREAD | `XGTHREAD::xgthread` | 线程池（future / fire-and-forget / WaitIdle）与主线程调度队列（任意线程 Post、拥有者线程 RunPending） |
