@@ -22,10 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Puts cl.exe / link.exe / ninja-friendly env in PATH regardless of which
-      # VS major version the runner image currently ships.
-      - uses: ilammy/msvc-dev-cmd@v1
-
       - name: Cache vcpkg binaries
         uses: actions/cache@v4
         with:
@@ -33,19 +29,20 @@ jobs:
           key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-${{ runner.os }}-
 
+      # No -G on purpose: the runner image keeps moving (VS 2022 today, VS 2026 next),
+      # and CMake picks whichever Visual Studio generator is actually installed.
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B .build -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
+          cmake -S . -B .build -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
             -DCPPLOCLIB_BUILD_TESTS=ON
 
       - name: Build
         shell: pwsh
-        run: cmake --build .build --parallel
+        run: cmake --build .build --config Release --parallel
 
       - name: Test
         shell: pwsh
-        run: ctest --test-dir .build --output-on-failure --timeout 180
+        run: ctest --test-dir .build -C Release --output-on-failure --timeout 180
