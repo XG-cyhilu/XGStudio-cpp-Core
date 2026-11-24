@@ -16,7 +16,7 @@ Apache-2.0 许可与构建约定（C++17、MSVC `/utf-8`、UTF-8 BOM 源码、CM
 | `modCrypto/` | XGCRYPTO | `XGCRYPTO::xgcrypto` | 摘要计算：MD5/SHA1/SHA256/SHA384/SHA512 的增量与一次性接口、文件哈希、CRC 校验配套的定长比较（CNG 实现） |
 | `modZip/` | XGZIP | `XGZIP::xgzip` | zip 读取、解压与写入：中央目录/ZIP64 解析、自带 inflate（store/fixed/dynamic）、filter 过滤、CRC+size 校验、路径穿越防护、atomic 进度；写入端支持 store / 固定 Huffman deflate、目录条目、`.tmp` 原子提交 |
 | `modFs/` | XGFS | `XGFS::xgfs` | 文件与路径：规范化/拆分、原子写、临时文件、递归遍历（通配过滤）、复制/移动/安全删除 |
-| `modCfg/` | XGCFG | `XGCFG::xgcfg` | JSON 值树与配置文件：宽松解析（注释/尾逗号）、保持插入顺序的对象、点路径读写、默认值、原子保存、mtime 变更检测与重载 |
+| `modCfg/` | XGCFG | `XGCFG::xgcfg` | JSON 值树与配置文件：宽松解析（注释/尾逗号）、保持插入顺序的对象、点路径读写、默认值、原子保存、mtime 变更检测与重载、脏标记与变更回调、深合并、结构体字段双向绑定（`Binder`） |
 | `modThread/` | XGTHREAD | `XGTHREAD::xgthread` | 线程池（future / fire-and-forget / WaitIdle）与主线程调度队列（任意线程 Post、拥有者线程 RunPending） |
 | `modNet/` | XGNET | `XGNET::xgnet` | 同步 HTTP 客户端（libcurl easy + 连接复用）：请求头/体、重定向、超时、代理（含系统代理探测）、状态码与响应头、内置 gunzip、URL/query 编解码、cookie jar；安装时自带静态 libcurl |
 | `modSecure/` | XGSECURE | `XGSECURE::xgsecure` | 编解码与密钥材料（CNG）：Base64 / Base64Url、密码学随机、HMAC-SHA256、AES-256-GCM 密封、PBKDF2-HMAC-SHA256 |

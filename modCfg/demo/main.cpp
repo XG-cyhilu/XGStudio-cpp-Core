@@ -106,6 +106,79 @@ int main() {
                      xgcfg::Dump(again, false) == xgcfg::Dump(cfg.Root(), false);
     printf("[6] roundtrip stable = %d\n", (int)roundtrip);
 
+    // 7) Dirty()：改 → 脏；存 → 干净
+    cfg.LoadText("{\"a\":1}", &err);
+    bool cleanAfterLoad = !cfg.Dirty();
+    cfg.Set("a", xgcfg::Value(static_cast<int64_t>(2)));
+    bool dirtyAfterSet = cfg.Dirty();
+    std::wstring p7 = L"xgcfg_demo_dirty.json";
+    cfg.SaveAs(p7, false, &err);
+    bool cleanAfterSave = !cfg.Dirty();
+    _wremove(p7.c_str());
+    printf("[7] dirty clean-load=%d dirty-set=%d clean-save=%d => %s\n", (int)cleanAfterLoad,
+           (int)dirtyAfterSet, (int)cleanAfterSave,
+           (cleanAfterLoad && dirtyAfterSet && cleanAfterSave) ? "OK" : "FAIL");
+
+    // 8) 变更回调：每个 Set/Remove 一次
+    {
+        cfg.LoadText("{\"ui\":{\"theme\":\"dark\"}}", &err);
+        int hits = 0;
+        std::string lastPath;
+        bool lastIsNull = false;
+        cfg.SetOnChange([&](const std::string& path, const xgcfg::Value& nv) {
+            ++hits;
+            lastPath = path;
+            lastIsNull = nv.IsNull();
+        });
+        cfg.Set("ui.theme", xgcfg::Value(std::string("light")));
+        cfg.Set("ui.scale", xgcfg::Value(1.5));
+        cfg.Remove("ui.scale");
+        printf("[8] onChange hits=%d last=%s null=%d => %s\n", hits, lastPath.c_str(),
+               (int)lastIsNull, (hits == 3 && lastPath == "ui.scale" && lastIsNull) ? "OK" : "FAIL");
+        cfg.SetOnChange(nullptr);
+    }
+
+    // 9) Merge：默认值 + 用户覆盖
+    {
+        xgcfg::Config defaults, user;
+        defaults.LoadText("{\"ui\":{\"theme\":\"dark\",\"scale\":1.0,\"tray\":true},\"mods\":[\"a\"]}", &err);
+        user.LoadText("{\"ui\":{\"theme\":\"light\"},\"mods\":[\"b\",\"c\"]}", &err);
+        size_t keep = defaults.Merge(user, false);   // 只补缺失：同名键一个都不动
+        bool kept = defaults.GetString("ui.theme") == "dark" && defaults.GetDouble("ui.scale") == 1.0 &&
+                    defaults.Root()["mods"].Size() == 1;
+        size_t over = defaults.Merge(user, true);    // 覆盖同名 + 数组整体替换
+        bool replaced = defaults.GetString("ui.theme") == "light" &&
+                        defaults.Root()["mods"].Size() == 2;
+        printf("[9] merge-keep=%zu kept=%d | merge-over=%zu theme=%s mods=%zu => %s\n", keep,
+               (int)kept, over, defaults.GetString("ui.theme").c_str(),
+               defaults.Root()["mods"].Size(), (kept && replaced && keep == 0) ? "OK" : "FAIL");
+    }
+
+    // 10) Binder：结构体字段双向同步
+    {
+        struct Settings {
+            bool tray = true;
+            int threads = 4;
+            uint32_t retries = 2;
+            double scale = 1.0;
+            std::string theme = "dark";
+        } s;
+        xgcfg::Config c10;
+        c10.LoadText("{\"ui\":{\"theme\":\"light\",\"threads\":8,\"retries\":2}}", &err);
+        xgcfg::Binder b(c10, "ui");
+        b.BindBool("tray", s.tray).BindInt("threads", s.threads).BindInt("retries", s.retries)
+         .BindDouble("scale", s.scale).BindString("theme", s.theme);
+        size_t pulled = b.Pull();
+        bool okPull = s.theme == "light" && s.threads == 8 && s.tray && s.retries == 2;
+        s.scale = 1.25;
+        s.tray = false;
+        size_t pushed = b.Push();
+        bool okPush = c10.GetDouble("ui.scale") == 1.25 && !c10.GetBool("ui.tray", true);
+        printf("[10] binder pulled=%zu ok=%d pushed=%zu ok=%d theme=%s => %s\n", pulled,
+               (int)okPull, pushed, (int)okPush, s.theme.c_str(),
+               (pulled == 2 && okPull && pushed == 2 && okPush) ? "OK" : "FAIL");
+    }
+
     _wremove(path.c_str());
     return 0;
 }

@@ -872,6 +872,7 @@ bool Config::Load(const std::wstring& path, std::string* err) {
     root_ = std::move(v);
     path_ = path;
     Stat(path, mtimeMs_, size_);
+    dirty_ = false;
     return true;
 }
 
@@ -879,6 +880,7 @@ bool Config::LoadText(const std::string& text, std::string* err) {
     Value v;
     if (!Parse(text, v, err, true)) return false;
     root_ = std::move(v);
+    dirty_ = false;
     return true;
 }
 
@@ -895,6 +897,7 @@ bool Config::SaveAs(const std::wstring& path, bool pretty, std::string* err) {
     if (!WriteAtomic(path, text, err)) return false;
     path_ = path;
     Stat(path, mtimeMs_, size_);
+    dirty_ = false;
     return true;
 }
 
@@ -911,12 +914,69 @@ bool Config::Reload(std::string* err) {
         if (err) *err = "no path set";
         return false;
     }
-    return Load(path_, err);
+    bool ok = Load(path_, err);
+    if (ok) dirty_ = false;
+    return ok;
 }
 
 bool Config::Has(const std::string& path) const { return root_.FindPath(path) != nullptr; }
 
-bool Config::Remove(const std::string& path) { return root_.RemovePath(path); }
+bool Config::Remove(const std::string& path) {
+    bool ok = root_.RemovePath(path);
+    if (!ok) return false;
+    dirty_ = true;
+    if (onChange_) {
+        auto cb = onChange_;
+        Value nullVal;
+        cb(path, nullVal);
+    }
+    return true;
+}
+
+void Config::SetOnChange(std::function<void(const std::string&, const Value&)> cb) {
+    onChange_ = std::move(cb);
+}
+
+namespace {
+
+// 深合并：对象递归；数组与标量在 overwrite 时整体替换。返回变更个数。
+size_t MergeInto(Value& dst, const Value& src, bool overwrite) {
+    if (!src.IsObject()) {
+        if (!overwrite && !dst.IsNull()) return 0;
+        dst = src;
+        return 1;
+    }
+    if (!dst.IsObject()) {
+        if (!overwrite && !dst.IsNull()) return 0;
+        dst = Value();
+        dst.EnsureObject();
+    }
+    size_t changes = 0;
+    for (const auto& key : src.Keys()) {
+        const Value* sv = src.Find(key);
+        if (!sv) continue;
+        Value* dv = dst.Find(key);
+        if (!dv) {
+            dst.SetKey(key, *sv);
+            ++changes;
+        } else {
+            changes += MergeInto(*dv, *sv, overwrite);
+        }
+    }
+    return changes;
+}
+
+} // namespace
+
+size_t Config::Merge(const Value& other, bool overwriteExisting) {
+    size_t changes = MergeInto(root_, other, overwriteExisting);
+    if (changes) dirty_ = true;
+    return changes;
+}
+
+size_t Config::Merge(const Config& other, bool overwriteExisting) {
+    return Merge(other.Root(), overwriteExisting);
+}
 
 bool Config::GetBool(const std::string& path, bool def) const {
     const Value* v = root_.FindPath(path);
@@ -938,6 +998,136 @@ std::string Config::GetString(const std::string& path, const std::string& def) c
     return v ? v->AsString(def) : def;
 }
 
-bool Config::Set(const std::string& path, const Value& v) { return root_.SetPath(path, v); }
+bool Config::Set(const std::string& path, const Value& v) {
+    if (!root_.SetPath(path, v)) return false;
+    dirty_ = true;
+    if (onChange_) {
+        const Value* now = root_.FindPath(path);
+        Value copy = now ? *now : v;
+        auto cb = onChange_;
+        cb(path, copy);
+    }
+    return true;
+}
+
+// ---------------- Binder ----------------
+
+struct Binder::Impl {
+    Config* cfg = nullptr;
+    std::string prefix;
+    struct Item {
+        std::string key;
+        std::function<bool(const Value*)> pull;   // 返回 true = 值有变化
+        std::function<Value()> push;
+    };
+    std::vector<Item> items;
+
+    std::string Full(const std::string& key) const {
+        if (prefix.empty()) return key;
+        if (key.empty()) return prefix;
+        return prefix + "." + key;
+    }
+};
+
+Binder::Binder(Config& cfg, const std::string& prefix) : impl_(new Impl()) {
+    impl_->cfg = &cfg;
+    impl_->prefix = prefix;
+}
+
+Binder::~Binder() = default;
+
+Binder& Binder::BindBool(const std::string& key, bool& ref) {
+    impl_->items.push_back({key,
+                            [&ref](const Value* v) {
+                                bool nv = v ? v->AsBool(ref) : ref;
+                                bool changed = nv != ref;
+                                ref = nv;
+                                return changed;
+                            },
+                            [&ref] { return Value(ref); }});
+    return *this;
+}
+
+Binder& Binder::BindInt(const std::string& key, int64_t& ref) {
+    impl_->items.push_back({key,
+                            [&ref](const Value* v) {
+                                int64_t nv = v ? v->AsInt(ref) : ref;
+                                bool changed = nv != ref;
+                                ref = nv;
+                                return changed;
+                            },
+                            [&ref] { return Value(ref); }});
+    return *this;
+}
+
+Binder& Binder::BindInt(const std::string& key, int& ref) {
+    impl_->items.push_back({key,
+                            [&ref](const Value* v) {
+                                int64_t nv = v ? v->AsInt(ref) : ref;
+                                bool changed = nv != ref;
+                                ref = (int)nv;
+                                return changed;
+                            },
+                            [&ref] { return Value((int64_t)ref); }});
+    return *this;
+}
+
+Binder& Binder::BindInt(const std::string& key, uint32_t& ref) {
+    impl_->items.push_back({key,
+                            [&ref](const Value* v) {
+                                int64_t nv = v ? v->AsInt((int64_t)ref) : (int64_t)ref;
+                                bool changed = nv != (int64_t)ref;
+                                ref = (uint32_t)nv;
+                                return changed;
+                            },
+                            [&ref] { return Value((int64_t)ref); }});
+    return *this;
+}
+
+Binder& Binder::BindDouble(const std::string& key, double& ref) {
+    impl_->items.push_back({key,
+                            [&ref](const Value* v) {
+                                double nv = v ? v->AsDouble(ref) : ref;
+                                bool changed = nv != ref;
+                                ref = nv;
+                                return changed;
+                            },
+                            [&ref] { return Value(ref); }});
+    return *this;
+}
+
+Binder& Binder::BindString(const std::string& key, std::string& ref) {
+    impl_->items.push_back({key,
+                            [&ref](const Value* v) {
+                                std::string nv = v ? v->AsString(ref) : ref;
+                                bool changed = nv != ref;
+                                ref = nv;
+                                return changed;
+                            },
+                            [&ref] { return Value(ref); }});
+    return *this;
+}
+
+size_t Binder::Pull() {
+    size_t changed = 0;
+    auto& root = impl_->cfg->Root();
+    for (auto& it : impl_->items)
+        if (it.pull(root.FindPath(impl_->Full(it.key)))) ++changed;
+    return changed;
+}
+
+size_t Binder::Push() {
+    size_t changed = 0;
+    auto& root = impl_->cfg->Root();
+    for (auto& it : impl_->items) {
+        std::string full = impl_->Full(it.key);
+        Value want = it.push();
+        const Value* cur = root.FindPath(full);
+        bool same = cur && cur->GetType() == want.GetType() &&
+                    Dump(*cur, false) == Dump(want, false);
+        if (!same && impl_->cfg->Set(full, want)) ++changed;
+    }
+    return changed;
+}
 
 } // namespace xgcfg

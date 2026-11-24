@@ -61,10 +61,32 @@ nlohmann/json 很好，但它意味着：一个 200KB+ 的模板重编译、`-fn
 | `Changed` | 只比 mtime + 大小，不读内容；适合 100~200ms 轮询一次 |
 | `Reload` | 重新加载（失败保留旧内容） |
 | `Has / Remove / GetBool / GetInt / GetDouble / GetString / Set` | 点路径读写，都有默认值参数 |
+| `Dirty` / `SetOnChange` | 自 `Load`/`LoadText`/`Save`/`SaveAs`/`Reload` 之后是否又被改过；每次生效的 `Set`/`Remove` 触发一次回调（`Remove` 传入 `null` 值） |
+| `Merge(other, overwriteExisting)` | 对象深合并；数组与标量按 `overwriteExisting` 整体替换；返回变更个数 |
 
 `Config::Load` 要求根是对象（数组根没有"点路径"意义，直接用 `Parse`）。
 
+## Binder：结构体与配置双向同步
+
+字段多了以后手写 `GetInt("ui.width", ...)` 容易拼错、也容易漏存。`Binder` 只记字段地址，值仍留在你自己的结构体里：
+
+```cpp
+struct Settings { bool tray = true; int threads = 4; double scale = 1.0; std::string theme = "dark"; } s;
+
+xgcfg::Binder b(cfg, "ui");                 // prefix 可为空，表示根层
+b.BindBool("tray", s.tray)
+ .BindInt("threads", s.threads)
+ .BindDouble("scale", s.scale)
+ .BindString("theme", s.theme);
+
+b.Pull();   // 配置 → 结构体：键不存在时**不动**默认值，返回真正变化的字段数
+b.Push();   // 结构体 → 配置：只写有差异的键（缺键会新建），同样返回变化数
+```
+
+`Pull` 不会把缺省项写成 `null` 或清零，所以"默认值写在结构体初始化里、用户只覆盖他想改的"是稳的。`Binder` 持有字段引用，声明周期不要短于被绑定的变量。
+
 ## 实测（`xgcfg_demo.exe`）
+
 
 | 项 | 结果 |
 | --- | --- |
@@ -76,6 +98,11 @@ nlohmann/json 很好，但它意味着：一个 200KB+ 的模板重编译、`-fn
 | `GetInt("no.such.key", -1)` | 返回 `-1` |
 | 手改文件 → `Changed` → `Reload` | `changed=1 reloaded=1`，读到 `edited / 9` |
 | `Dump → Parse → Dump` | 紧凑结果完全一致 |
+| `Dirty()`（改/存/载） | 载入后 `0` → `Set` 后 `1` → `SaveAs` 后 `0` |
+| 变更回调 | `Set×2 + Remove×1` → `hits=3`，最后一次 `ui.scale` 且值为 `null` |
+| `Merge(user, false)` | `0` 处变更（同名键全部保留默认） |
+| `Merge(user, true)` | `2` 处变更（`ui.theme` 覆盖，`mods` 数组整体替换） |
+| `Binder` | `Pull` 拉到 `theme=light / threads=8` 共 `2` 个字段；`Push` 写回 `2` 处 |
 
 ## 构建
 
