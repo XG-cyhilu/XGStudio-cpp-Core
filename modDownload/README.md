@@ -1,4 +1,4 @@
-# XGDownload (XGDL)
+﻿# XGDownload (XGDL)
 
 Windows 上的 C++17 多路复用下载库。网络 I/O 与计算分离：底层是 `libcurl` 的 `CURLM` 事件循环，
 上层是大小文件分离的两组线程池，进度通过原子变量对外暴露，UI 只做轮询——不回调、不加锁。
@@ -56,23 +56,69 @@ while (mgr.PollEvent(ev)) { /* 完成或失败，刷新列表 */ }
 
 ## 公开 API
 
-| 类型 | 说明 |
+全部接口都在 `include/xgdl/xgdl.h` 里，分三块：类型、`Manager` 方法、两个 `Add` 重载。
+
+### 类型
+
+| 类型 | 内容 |
 |---|---|
-| `Config` | 线程数、阈值、分块大小、重试次数、连接上限、环形缓冲大小、超时、全局限速（`maxSpeedBytesPerSec`） |
-| `TaskOptions` | 单任务：`expectBytes` / `hash{alg,hex}` / `priority` / `mirrors` / `headers` / `resume` / `mtimeMs` |
-| `HashAlg` | `None` / `Md5` / `Sha1` / `Sha256` / `Sha512`，大小写不敏感比较 |
-| `Manager::Add(url, path, TaskOptions)` | 完整入队，返回任务 id（0 = 参数非法/路径重复） |
-| `Manager::Add(url, path, expectBytes, sha1, priority)` | 简写重载，兼容旧代码 |
-| `Manager::Start / Pause / Resume / Cancel / CancelAll` | 生命周期（Cancel 会清掉该任务所有排队项） |
-| `Manager::Snapshot()` | `Progress`：bytesTotal / bytesDone / bytesPerSec / active / queued / completed / failed |
-| `Manager::PollEvent(Event&)` | UI 轮询完成/失败，非阻塞；失败事件带 HTTP 状态和原因串 |
-| `Manager::QueryTask(id, TaskInfo&)` | 单任务状态、已下载字节、重试次数、当前是否走分块 |
-| `Manager::WaitIdle()` | 跑到队列空（CLI/测试） |
-| `Manager::Shutdown()` | 停线程；析构自动调用 |
+| `Priority` | `High` / `Normal` / `Low` |
+| `HashAlg` | `None` / `Md5` / `Sha1` / `Sha256` / `Sha512`（CNG 实现；`None` = 不校验） |
+| `HashExpect` | `{ HashAlg alg; std::wstring hex; }`，十六进制比对、大小写不敏感 |
+| `TaskState` | `Queued` / `Downloading` / `Verifying` / `Completed` / `Failed` / `Cancelled` |
+| `Progress` | `bytesTotal` / `bytesDone` / `bytesPerSec` / `active` / `queued` / `completed` / `failed` |
+| `Event` | `id` / `kind(Completed / Failed)` / `path` / `httpStatus` / `message` |
+| `TaskInfo` | `id` / `url` / `path` / `sizeTotal` / `sizeDone` / `state` / `priority` / `attempt` / `large` |
 
-公开头 `include/xgdl/xgdl.h` **不包含 `curl.h`，也不包含任何 Windows 头**，只有标准库 + 前置声明，
-所以调用方工程不会被拖进 libcurl 的宏污染。
+`TaskOptions`（单任务选项）：
 
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `expectBytes` | 0 | 期望大小；`0` = 未知，运行中按 `Content-Length` 补齐。给了就先比大小，省一次全文件哈希 |
+| `hash` | `{None, L""}` | 摘要算法 + 期望十六进制串 |
+| `priority` | `Normal` | 入队优先级 |
+| `mirrors` | 空 | 主源失败后**按顺序**尝试的备用 URL；加速域名/自建源/回源都只是字符串，库不认识任何具体站点 |
+| `headers` | 空 | 每个请求附加的 UTF-8 键值对（`Authorization` / `Referer` / UA 覆盖） |
+| `resume` | `true` | 是否从 `.part` 已有字节续传 |
+| `mtimeMs` | 0 | 非 0 时完成后把文件修改时间设成该值（清单增量比对用） |
+
+`Config`（全局参数）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `smallThreads` | 16 | 小文件并发线程数（每线程同时只跑 1 个任务） |
+| `largeThreads` | 4 | 大文件分块并发数 |
+| `largeThreshold` | 1 MB | 超过这个大小走分块 Range 路径 |
+| `chunkSize` | 8 MB | 分块大小 |
+| `maxRetries` / `retryDelayMs` | 3 / 1000 | 失败重试次数与退避 |
+| `maxConnections` / `maxHostConnections` | 48 / 16 | CURLM 总连接数 / 单主机连接上限 |
+| `ringBytes` | 1 MB | 每任务接收环形缓冲；写满即暂停该 easy handle |
+| `writeThreads` | 2 | 独立写盘线程数 |
+| `connectTimeoutSec` / `idleTimeoutSec` | 15 / 30 | 连接超时、空闲超时 |
+| `maxSpeedBytesPerSec` | 0 | 全局限速（字节/秒），`0` = 不限；多任务时是**每任务**上限 |
+
+### `Manager`
+
+| 方法 | 说明 |
+|---|---|
+| `Manager(const Config& = {})` | 不可拷贝；析构自动 `Shutdown()` |
+| `Add(url, path, TaskOptions)` → `uint32_t` | 完整入队，返回任务 id；空 URL / 空路径 / 路径重复返回 `0` |
+| `Add(url, path, expectBytes, expectSha1, priority)` → `uint32_t` | 简写重载，内部就是只填 `expectBytes` + `Sha1` 的 `TaskOptions` |
+| `Start()` | 启动调度与线程 |
+| `Pause()` | 只停止派发新任务，在跑的继续 |
+| `Resume()` | 恢复派发 |
+| `Cancel(id)` / `CancelAll()` | 取消单任务 / 全部（清三队列并置 `Cancelled`，不留 part 残片） |
+| `Snapshot()` → `Progress` | UI 每帧或每 200ms 调一次；`bytesPerSec` 按两次调用的间隔算（指数平滑） |
+| `PollEvent(Event&)` → `bool` | 轮询完成/失败事件，非阻塞；`false` = 队列空 |
+| `QueryTask(id, TaskInfo&)` → `bool` | 单任务状态、已下载字节、重试次数、是否走分块 |
+| `WaitIdle()` | 阻塞到无排队与在途任务（CLI/测试用） |
+| `Shutdown()` | 停线程并清理；之后不再可用 |
+
+### 调用约定
+
+- **模型是轮询，没有回调**：进度拉 `Snapshot()`、结果拉 `PollEvent()`，与 UI 线程每 200ms 拉一次的设计一致。
+- **线程**：`Add` / `Cancel` / `Snapshot` / `PollEvent` / `QueryTask` 都可从 UI 线程调；`curl_multi_*` 已在库内用一把互斥串行化，不要自己在外面并发碰底层。
+- 公开头**不包含 `curl.h`、也不包含任何 Windows 头**，只有标准库，调用方工程不会被 libcurl 的宏污染。
 ## 构建
 
 静态 libcurl 需要先准备（本仓库默认找 `.deps/curl-install`，也可以用 `-DXGDL_CURL_DIR=...` 指别处，
@@ -117,14 +163,15 @@ find_package(xgdl 1.0 REQUIRED CONFIG)
 target_link_libraries(YourApp PRIVATE XGDL::xgdl)
 ```
 
-安装后的导入目标是干净的——libcurl 不再是绝对路径，而是 `CURL::libcurl`。所以消费者侧必须先让
-`find_package(CURL)` 找到静态 curl：vcpkg 装到全局前缀即可，或把 curl 安装前缀放进 `CMAKE_PREFIX_PATH`：
+安装导出里写的 curl 依赖取决于配置时用的是哪一种：走 `find_package(CURL)`（vcpkg / 系统前缀）时导出
+`CURL::libcurl`，消费端需要 `find_package(CURL)` 能解析到静态 curl；用 `.deps/curl-install` 私有目录时
+会导出那条绝对路径，只适合本机。跨机器分发建议前者。
 
 ```powershell
 cmake -S . -B build -DCMAKE_PREFIX_PATH="D:\SDK\xgdl;D:\SDK\curl"
 ```
 
-如果消费者只有 `.deps/curl-install` 这种私有目录，用 `add_subdirectory` 形态更省事。
+如果消费者手上就是同一份 `.deps/curl-install`（或干脆同仓库），用 `add_subdirectory` 形态更省事。
 
 ## 示例
 
@@ -152,6 +199,7 @@ xgdl_demo --selfcheck               # 本地回环自检，不需要外网
 | SHA1 故意写错 | 校验失败 → 删文件 → 重试 3 次 → 最终失败 |
 | `--selfcheck`（镜像 / 续传 / 摘要 / 分块） | 4/4 OK，`attempt=1`（主源 404 后第一次换源即成功） |
 | 300KB 单流 + 120KB 残片 | 服务器收到 `Range: bytes=120000`，只补传剩余 187200 字节 |
+| GitHub release 安装包 65.9MB（4 路分块 + SHA-256） | 12.74s，平均 5.3MB/s、峰值 11.0MB/s；文件 SHA-256 与 release 官方值逐字符一致 |
 
 ## 目录
 
