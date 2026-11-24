@@ -40,11 +40,18 @@ std::wstring Lower(std::wstring s) {
 
 struct Entry {
     uint32_t id = 0;
-    std::wstring url, path, sha1;
+    std::wstring url, path;
+    std::vector<std::wstring> urls;      // 主 URL + 镜像，失败后按顺序轮换
+    std::vector<std::pair<std::wstring, std::wstring>> headers;
+    std::wstring hashHex;                // 期望摘要（空 = 不校验）
+    HashAlg hashAlg = HashAlg::None;
+    bool resume = true;
+    int64_t mtimeMs = 0;
     uint64_t expect = 0;
     Priority prio = Priority::Normal;
     TaskState state = TaskState::Queued;
     int attempt = 0;
+    int urlIdx = 0;                      // 当前使用的源下标（mu 保护）
     bool large = false;
     uint64_t total = 0;
 
@@ -55,6 +62,9 @@ struct Entry {
     std::mutex mu;                          // 终态切换互斥，防止并发重复计重试
 };
 using EntryPtr = std::shared_ptr<Entry>;
+
+// 下载中的临时文件：完成并校验通过后才改名成正式文件
+std::wstring PartPath(const EntryPtr& e) { return e->path + L".part"; }
 
 struct Work {
     EntryPtr e;
@@ -246,29 +256,74 @@ struct Manager::Impl {
         }
     }
 
+    // 等写盘线程把文件句柄关掉。job->done 早于落盘收尾，不等就会撞共享冲突。
+    void WaitSinkClosed(const detail::SinkPtr& sink) {
+        if (!sink) return;
+        for (int i = 0; i < 5000 && !sink->closed.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
     void RunSmall(const EntryPtr& e) {
         if (e->cancel.load()) { FinishCancelled(e); return; }
         e->state = TaskState::Downloading;
 
-        auto sink = std::make_shared<detail::Sink>();
-        sink->path = e->path;
-        sink->maxQueueBytes = cfg.ringBytes;
-        std::string err;
-        if (!detail::EnsureParentDir(e->path, err)) { Fail(e, 0, detail::Widen(err)); return; }
+        std::wstring url, part = PartPath(e);
+        {
+            std::lock_guard<std::mutex> lk(e->mu);
+            if (e->urlIdx < 0 || e->urlIdx >= (int)e->urls.size()) e->urlIdx = 0;
+            url = e->urls.empty() ? e->url : e->urls[e->urlIdx];
+            e->url = url;
+        }
 
-        auto job = engine->Submit(e->url, sink);
+        // 断点续传：.part 已有字节就带着 Range 继续写
+        uint64_t resumeFrom = 0;
+        if (e->resume) {
+            uint64_t sz = 0;
+            if (detail::FileSize(part, sz) && sz > 0) {
+                if (e->expect && sz >= e->expect) { CleanupFile(part); sz = 0; }   // 已经下满却没合并成功 → 重下
+                resumeFrom = sz;
+            }
+        }
+
+        auto sink = std::make_shared<detail::Sink>();
+        sink->path = part;
+        sink->maxQueueBytes = cfg.ringBytes;
+        sink->append = resumeFrom > 0;
+        std::string err;
+        if (!detail::EnsureParentDir(part, err)) { Fail(e, 0, detail::Widen(err)); return; }
+
+        auto job = engine->Submit(url, sink, resumeFrom, 0, e->headers);
         Track(e, job);
         Await(job);
         Untrack(job);
+        WaitSinkClosed(sink);
 
-        if (e->cancel.load()) { CleanupFile(e->path); FinishCancelled(e); return; }
+        if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
+
+        // 服务器忽略了 Range（返回 200 而不是 206）：刚写进去的数据是整段内容，接在旧尾巴上就废了
+        if (job->ok && resumeFrom > 0 && job->httpStatus == 200) {
+            CleanupFile(part);
+            RequeueSingle(e);
+            return;
+        }
+
         if (!job->ok) { Fail(e, job->httpStatus, detail::Widen(job->error)); return; }
-        if (sink->failed) { CleanupFile(e->path); Fail(e, job->httpStatus, L"disk write failed"); return; }
+        if (sink->failed) { CleanupFile(part); Fail(e, job->httpStatus, L"disk write failed"); return; }
 
-        e->finished.store(job->bytesDone.load());
-        if (job->contentLength) e->total = job->contentLength;
+        e->finished.store(resumeFrom + job->bytesDone.load());
+        if (job->contentLength && resumeFrom > 0)
+            e->total = resumeFrom + job->contentLength;
+        else if (job->contentLength)
+            e->total = job->contentLength;
 
-        if (!Verify(e)) return;
+        if (!Verify(e, part)) return;
+
+        std::string mvErr;
+        if (!detail::MoveReplace(part, e->path, mvErr)) {
+            Fail(e, job->httpStatus, L"rename failed: " + detail::Widen(mvErr));
+            return;
+        }
+        detail::SetFileMtime(e->path, e->mtimeMs);
         Complete(e);
     }
 
@@ -281,16 +336,25 @@ struct Manager::Impl {
         e->state = TaskState::Downloading;
         std::wstring part = e->path + L".part" + std::to_wstring(w.chunk);
 
+        std::wstring url;
+        {
+            std::lock_guard<std::mutex> lk(e->mu);
+            if (e->urlIdx < 0 || e->urlIdx >= (int)e->urls.size()) e->urlIdx = 0;
+            url = e->urls.empty() ? e->url : e->urls[e->urlIdx];
+            e->url = url;
+        }
+
         auto sink = std::make_shared<detail::Sink>();
         sink->path = part;
         sink->maxQueueBytes = cfg.ringBytes;
         std::string err;
         if (!detail::EnsureParentDir(part, err)) { Fail(e, 0, detail::Widen(err)); return; }
 
-        auto job = engine->Submit(e->url, sink, w.start, w.end);
+        auto job = engine->Submit(url, sink, w.start, w.end, e->headers);
         Track(e, job);
         Await(job);
         Untrack(job);
+        WaitSinkClosed(sink);
 
         if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
 
@@ -310,11 +374,19 @@ struct Manager::Impl {
         e->finished.fetch_add(got);
         if (e->pending.fetch_sub(1) != 1) return;   // 还有分块没完
 
-        // 最后一块：合并且校验
+        // 最后一块：合并到 .part、校验、再改名成正式文件
         e->state = TaskState::Verifying;
-        if (!MergeChunks(e)) { CleanupParts(e); Fail(e, 0, L"merge failed"); return; }
+        std::wstring merged = PartPath(e);
+        if (!MergeChunks(e, merged)) { CleanupParts(e); CleanupFile(merged); Fail(e, 0, L"merge failed"); return; }
         CleanupParts(e);
-        if (!Verify(e)) return;
+        if (!Verify(e, merged)) { CleanupFile(merged); return; }
+        std::string mvErr;
+        if (!detail::MoveReplace(merged, e->path, mvErr)) {
+            CleanupFile(merged);
+            Fail(e, 0, L"rename failed: " + detail::Widen(mvErr));
+            return;
+        }
+        detail::SetFileMtime(e->path, e->mtimeMs);
         Complete(e);
     }
 
@@ -337,8 +409,8 @@ struct Manager::Impl {
         qcv.notify_all();
     }
 
-    bool MergeChunks(const EntryPtr& e) {
-        std::FILE* out = _wfopen(e->path.c_str(), L"wb");
+    bool MergeChunks(const EntryPtr& e, const std::wstring& outPath) {
+        std::FILE* out = _wfopen(outPath.c_str(), L"wb");
         if (!out) return false;
         std::vector<uint8_t> buf(1 << 20);
         int n = (int)e->pending.load();
@@ -373,19 +445,34 @@ struct Manager::Impl {
 
     void CleanupFile(const std::wstring& p) { _wremove(p.c_str()); }
 
-    bool Verify(const EntryPtr& e) {
-        if (e->sha1.empty()) return true;
+    bool Verify(const EntryPtr& e, const std::wstring& file) {
+        // 期望大小写明了就先比大小，省一次全文件哈希（也能提前抓出服务器截断）
+        if (e->expect) {
+            uint64_t sz = 0;
+            if (!detail::FileSize(file, sz)) {
+                CleanupFile(file);
+                Fail(e, 0, L"cannot stat downloaded file");
+                return false;
+            }
+            if (sz != e->expect) {
+                CleanupFile(file);
+                Fail(e, 0, L"size mismatch: got " + std::to_wstring(sz) +
+                          L" expect " + std::to_wstring(e->expect));
+                return false;
+            }
+        }
+        if (e->hashAlg == HashAlg::None || e->hashHex.empty()) return true;
         e->state = TaskState::Verifying;
         std::wstring hex;
         std::string err;
-        if (!detail::Sha1File(e->path, hex, err)) {
-            CleanupFile(e->path);
-            Fail(e, 0, L"sha1 read failed: " + detail::Widen(err));
+        if (!detail::HashFile(e->hashAlg, file, hex, err)) {
+            CleanupFile(file);
+            Fail(e, 0, L"hash read failed: " + detail::Widen(err));
             return false;
         }
-        if (Lower(hex) != Lower(e->sha1)) {
-            CleanupFile(e->path);
-            Fail(e, 0, L"sha1 mismatch: got " + hex);
+        if (Lower(hex) != Lower(e->hashHex)) {
+            CleanupFile(file);
+            Fail(e, 0, L"hash mismatch: got " + hex);
             return false;
         }
         return true;
@@ -424,6 +511,11 @@ struct Manager::Impl {
                 e->finished.store(0);
                 e->pending.store(0);
                 e->rangeUnsupported.store(false);
+                // 有镜像就换下一个源，换到末尾再绕回主源
+                if (!e->urls.empty()) {
+                    e->urlIdx = (e->urlIdx + 1) % (int)e->urls.size();
+                    e->url = e->urls[e->urlIdx];
+                }
                 retry = true;
             } else {
                 e->state = TaskState::Failed;
@@ -545,6 +637,17 @@ Manager::~Manager() = default;
 uint32_t Manager::Add(const std::wstring& url, const std::wstring& path,
                       uint64_t expectBytes, const std::wstring& expectSha1,
                       Priority priority) {
+    TaskOptions opt;
+    opt.expectBytes = expectBytes;
+    opt.priority = priority;
+    if (!expectSha1.empty()) {
+        opt.hash.alg = HashAlg::Sha1;
+        opt.hash.hex = expectSha1;
+    }
+    return Add(url, path, opt);
+}
+
+uint32_t Manager::Add(const std::wstring& url, const std::wstring& path, const TaskOptions& opt) {
     if (url.empty() || path.empty()) return 0;
     {
         std::lock_guard<std::mutex> lk(impl_->listMu);
@@ -554,10 +657,16 @@ uint32_t Manager::Add(const std::wstring& url, const std::wstring& path,
     e->id = impl_->nextId.fetch_add(1);
     e->url = url;
     e->path = path;
-    e->expect = expectBytes;
-    e->sha1 = expectSha1;
-    e->prio = priority;
-    e->total = expectBytes;
+    e->urls.push_back(url);
+    for (auto& m : opt.mirrors) if (!m.empty() && m != url) e->urls.push_back(m);
+    e->headers = opt.headers;
+    e->expect = opt.expectBytes;
+    e->hashAlg = opt.hash.alg;
+    e->hashHex = opt.hash.hex;
+    e->resume = opt.resume;
+    e->mtimeMs = opt.mtimeMs;
+    e->prio = opt.priority;
+    e->total = opt.expectBytes;
     {
         std::lock_guard<std::mutex> lk(impl_->listMu);
         impl_->entries.push_back(e);
@@ -586,12 +695,12 @@ void Manager::Cancel(uint32_t id) {
     impl_->CancelSiblings(e);
     {
         std::lock_guard<std::mutex> lk(impl_->qmu);
-        for (auto it = impl_->pending.begin(); it != impl_->pending.end(); ++it)
-            if (it->get() == e.get()) { impl_->pending.erase(it); break; }
-        for (auto it = impl_->smallQ.begin(); it != impl_->smallQ.end(); ++it)
-            if (it->e.get() == e.get()) { impl_->smallQ.erase(it); break; }
-        for (auto it = impl_->largeQ.begin(); it != impl_->largeQ.end(); ++it)
-            if (it->e.get() == e.get()) { impl_->largeQ.erase(it); break; }
+        for (auto it = impl_->pending.begin(); it != impl_->pending.end();)
+            if (it->get() == e.get()) it = impl_->pending.erase(it); else ++it;
+        for (auto it = impl_->smallQ.begin(); it != impl_->smallQ.end();)
+            if (it->e.get() == e.get()) it = impl_->smallQ.erase(it); else ++it;
+        for (auto it = impl_->largeQ.begin(); it != impl_->largeQ.end();)
+            if (it->e.get() == e.get()) it = impl_->largeQ.erase(it); else ++it;
     }
     impl_->qcv.notify_all();
 }

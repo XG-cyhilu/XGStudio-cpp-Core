@@ -87,10 +87,12 @@ void Engine::Shutdown() {
     }
     for (auto& j : jobs) {
         if (j->easy) {
+            std::lock_guard<std::mutex> lk(curlMu_);
             curl_multi_remove_handle(multi_, j->easy);
             curl_easy_cleanup(j->easy);
             j->easy = nullptr;
         }
+        if (j->hdrList) { curl_slist_free_all(j->hdrList); j->hdrList = nullptr; }
         std::lock_guard<std::mutex> lk(j->mu);
         j->ok = false;
         if (j->error.empty()) j->error = "shutdown";
@@ -101,10 +103,12 @@ void Engine::Shutdown() {
         std::lock_guard<std::mutex> lk(writerMu_);
         for (auto& s : sinks_) {
             if (s->file) { std::fclose(s->file); s->file = nullptr; }
+            s->closed.store(true);
         }
         sinks_.clear();
     }
     if (multi_) {
+        std::lock_guard<std::mutex> lk(curlMu_);
         curl_multi_cleanup(multi_);
         multi_ = nullptr;
     }
@@ -130,7 +134,8 @@ void Engine::SignalStreamEnd(const SinkPtr& s) {
 }
 
 JobPtr Engine::Submit(const std::wstring& url, const SinkPtr& sink,
-                      uint64_t rangeStart, uint64_t rangeEnd) {
+                      uint64_t rangeStart, uint64_t rangeEnd,
+                      const std::vector<std::pair<std::wstring, std::wstring>>& headers) {
     JobPtr job = std::make_shared<Job>();
     job->sink = sink;
     job->url = url;
@@ -162,6 +167,19 @@ JobPtr Engine::Submit(const std::wstring& url, const SinkPtr& sink,
     // (CRYPT_E_NO_REVOCATION_CHECK)。这里退回"尽力而为"，证书链仍然验证。
     curl_easy_setopt(e, CURLOPT_SSL_OPTIONS, (long)(CURLSSLOPT_REVOKE_BEST_EFFORT | CURLSSLOPT_NO_PARTIALCHAIN));
 
+    if (cfg_.maxSpeedBytesPerSec) {
+        curl_easy_setopt(e, CURLOPT_MAX_RECV_SPEED_LARGE,
+                         (curl_off_t)cfg_.maxSpeedBytesPerSec);
+    }
+
+    // 每任务请求头：先压成 UTF-8 再交给 curl；"头名: 值" 格式，空值头可用于删除默认头
+    for (auto& h : headers) {
+        std::string line = Utf8(h.first) + ": " + Utf8(h.second);
+        job->headers.emplace_back(Utf8(h.first), Utf8(h.second));
+        job->hdrList = curl_slist_append(job->hdrList, line.c_str());
+    }
+    if (job->hdrList) curl_easy_setopt(e, CURLOPT_HTTPHEADER, job->hdrList);
+
     std::string range;
     if (rangeEnd > 0) {
         range = std::to_string(rangeStart) + "-" + std::to_string(rangeEnd);
@@ -177,13 +195,18 @@ JobPtr Engine::Submit(const std::wstring& url, const SinkPtr& sink,
     }
     if (sink) RegisterSink(sink);
 
-    CURLMcode mrc = curl_multi_add_handle(multi_, e);
+    CURLMcode mrc;
+    {
+        std::lock_guard<std::mutex> lk(curlMu_);
+        mrc = multi_ ? curl_multi_add_handle(multi_, e) : CURLM_BAD_HANDLE;
+    }
     if (mrc != CURLM_OK) {
         std::lock_guard<std::mutex> lk(job->mu);
         job->error = std::string("curl_multi_add_handle: ") + curl_multi_strerror(mrc);
         job->ok = false;
         job->done = true;
         job->cvDone.notify_all();
+        if (job->hdrList) { curl_slist_free_all(job->hdrList); job->hdrList = nullptr; }
     }
     curl_multi_wakeup(multi_);
     return job;
@@ -246,11 +269,19 @@ void Engine::ResumePausedJobs() {
 void Engine::NetworkLoop() {
     while (running_.load()) {
         int stillRunning = 0;
-        curl_multi_perform(multi_, &stillRunning);
+        {
+            std::lock_guard<std::mutex> lk(curlMu_);
+            curl_multi_perform(multi_, &stillRunning);
+        }
 
         CURLMsg* msg = nullptr;
         int inQueue = 0;
-        while ((msg = curl_multi_info_read(multi_, &inQueue)) != nullptr) {
+        for (;;) {
+            {
+                std::lock_guard<std::mutex> lk(curlMu_);
+                msg = curl_multi_info_read(multi_, &inQueue);
+            }
+            if (!msg) break;
             if (msg->msg != CURLMSG_DONE) continue;
             CURL* easy = msg->easy_handle;
             JobPtr job;
@@ -260,9 +291,13 @@ void Engine::NetworkLoop() {
             }
             if (!job) continue;
             FinishJob(job, msg->data.result);
-            curl_multi_remove_handle(multi_, easy);
-            curl_easy_cleanup(easy);
+            {
+                std::lock_guard<std::mutex> lk(curlMu_);
+                curl_multi_remove_handle(multi_, easy);
+                curl_easy_cleanup(easy);
+            }
             job->easy = nullptr;
+            if (job->hdrList) { curl_slist_free_all(job->hdrList); job->hdrList = nullptr; }
             {
                 std::lock_guard<std::mutex> lk(allMu_);
                 for (auto it = all_.begin(); it != all_.end(); ++it) {
@@ -275,7 +310,10 @@ void Engine::NetworkLoop() {
 
         if (!running_.load()) break;
         int numfds = 0;
-        curl_multi_poll(multi_, nullptr, 0, stillRunning == 0 ? 5 : 1, &numfds);
+        {
+            std::lock_guard<std::mutex> lk(curlMu_);
+            curl_multi_poll(multi_, nullptr, 0, stillRunning == 0 ? 5 : 1, &numfds);
+        }
     }
 
     // 退出：把还在途的 handle 全部作废，避免 Manager 里的等待方卡死
@@ -290,6 +328,7 @@ void Engine::NetworkLoop() {
             curl_easy_cleanup(j->easy);
             j->easy = nullptr;
         }
+        if (j->hdrList) { curl_slist_free_all(j->hdrList); j->hdrList = nullptr; }
         std::lock_guard<std::mutex> lk(j->mu);
         j->ok = false;
         if (j->error.empty()) j->error = "shutdown";
@@ -326,7 +365,7 @@ void Engine::WriterLoop() {
             if (!chunk.empty()) {
                 didWork = true;
                 if (!s->file) {
-                    s->file = _wfopen(s->path.c_str(), L"wb");
+                    s->file = _wfopen(s->path.c_str(), s->append ? L"ab" : L"wb");
                     if (!s->file) {
                         std::lock_guard<std::mutex> slk(s->mu);
                         s->failed = true;
@@ -341,14 +380,19 @@ void Engine::WriterLoop() {
                     std::lock_guard<std::mutex> slk(s->mu);
                     s->writtenBytes += chunk.size();
                     if (s->streamEnded && s->chunks.empty()) {
+                        std::fflush(s->file);
                         std::fclose(s->file);
                         s->file = nullptr;
+                        s->closed.store(true);
                     }
+                } else {
+                    s->closed.store(true);   // 打开失败，没有句柄可关
                 }
             }
 
             if (shouldClose || s->failed) {
-                if (s->file) { std::fclose(s->file); s->file = nullptr; }
+                if (s->file) { std::fflush(s->file); std::fclose(s->file); s->file = nullptr; }
+                s->closed.store(true);
                 std::lock_guard<std::mutex> lk(writerMu_);
                 for (auto it = sinks_.begin(); it != sinks_.end(); ++it) {
                     if (it->get() == s.get()) { sinks_.erase(it); break; }

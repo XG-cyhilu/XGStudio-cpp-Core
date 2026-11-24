@@ -63,28 +63,50 @@ bool EnsureParentDir(const std::wstring& filePath, std::string& err) {
     return true;
 }
 
-bool Sha1File(const std::wstring& path, std::wstring& hex, std::string& err) {
-    BCRYPT_ALG_HANDLE alg = nullptr;
+bool HashFile(HashAlg alg, const std::wstring& path, std::wstring& hex, std::string& err) {
+    if (alg == HashAlg::None) {
+        hex.clear();
+        return true;
+    }
+    const wchar_t* algName = BCRYPT_SHA1_ALGORITHM;
+    switch (alg) {
+    case HashAlg::Md5: algName = BCRYPT_MD5_ALGORITHM; break;
+    case HashAlg::Sha1: algName = BCRYPT_SHA1_ALGORITHM; break;
+    case HashAlg::Sha256: algName = BCRYPT_SHA256_ALGORITHM; break;
+    case HashAlg::Sha512: algName = BCRYPT_SHA512_ALGORITHM; break;
+    default: break;
+    }
+
+    BCRYPT_ALG_HANDLE algH = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
     std::vector<uint8_t> obj;
-    std::vector<uint8_t> digest(20);
+    std::vector<uint8_t> digest;
     bool ok = false;
     std::FILE* f = nullptr;
 
-    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA1_ALGORITHM, nullptr, 0) < 0) {
+    if (BCryptOpenAlgorithmProvider(&algH, algName, nullptr, 0) < 0) {
         err = "BCryptOpenAlgorithmProvider failed";
         return false;
     }
-    DWORD objLen = 0, cb = 0;
-    if (BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&objLen, sizeof(objLen), &cb, 0) < 0) {
+    DWORD digestLen = 0, cb = 0;
+    if (BCryptGetProperty(algH, BCRYPT_HASH_LENGTH, (PUCHAR)&digestLen, sizeof(digestLen), &cb, 0) < 0 ||
+        !digestLen) {
         err = "BCryptGetProperty failed";
-        BCryptCloseAlgorithmProvider(alg, 0);
+        BCryptCloseAlgorithmProvider(algH, 0);
+        return false;
+    }
+    digest.resize(digestLen);
+
+    DWORD objLen = 0;
+    if (BCryptGetProperty(algH, BCRYPT_OBJECT_LENGTH, (PUCHAR)&objLen, sizeof(objLen), &cb, 0) < 0) {
+        err = "BCryptGetProperty failed";
+        BCryptCloseAlgorithmProvider(algH, 0);
         return false;
     }
     obj.resize(objLen);
-    if (BCryptCreateHash(alg, &hash, obj.data(), objLen, nullptr, 0, 0) < 0) {
+    if (BCryptCreateHash(algH, &hash, obj.data(), objLen, nullptr, 0, 0) < 0) {
         err = "BCryptCreateHash failed";
-        BCryptCloseAlgorithmProvider(alg, 0);
+        BCryptCloseAlgorithmProvider(algH, 0);
         return false;
     }
 
@@ -92,7 +114,7 @@ bool Sha1File(const std::wstring& path, std::wstring& hex, std::string& err) {
     if (!f) {
         err = "open failed";
         BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(alg, 0);
+        BCryptCloseAlgorithmProvider(algH, 0);
         return false;
     }
 
@@ -103,7 +125,7 @@ bool Sha1File(const std::wstring& path, std::wstring& hex, std::string& err) {
             err = "BCryptHashData failed";
             std::fclose(f);
             BCryptDestroyHash(hash);
-            BCryptCloseAlgorithmProvider(alg, 0);
+            BCryptCloseAlgorithmProvider(algH, 0);
             return false;
         }
     }
@@ -112,7 +134,7 @@ bool Sha1File(const std::wstring& path, std::wstring& hex, std::string& err) {
     if (readErr) {
         err = "read failed";
         BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(alg, 0);
+        BCryptCloseAlgorithmProvider(algH, 0);
         return false;
     }
 
@@ -129,7 +151,43 @@ bool Sha1File(const std::wstring& path, std::wstring& hex, std::string& err) {
     }
 
     BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(alg, 0);
+    BCryptCloseAlgorithmProvider(algH, 0);
+    return ok;
+}
+
+bool Sha1File(const std::wstring& path, std::wstring& hex, std::string& err) {
+    return HashFile(HashAlg::Sha1, path, hex, err);
+}
+
+bool FileSize(const std::wstring& path, uint64_t& bytes) {
+    WIN32_FILE_ATTRIBUTE_DATA ad{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &ad)) return false;
+    if (ad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
+    bytes = (static_cast<uint64_t>(ad.nFileSizeHigh) << 32) | ad.nFileSizeLow;
+    return true;
+}
+
+bool MoveReplace(const std::wstring& src, const std::wstring& dst, std::string& err) {
+    if (!MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DWORD e = GetLastError();
+        err = "MoveFileEx failed: " + std::to_string(e);
+        return false;
+    }
+    return true;
+}
+
+bool SetFileMtime(const std::wstring& path, int64_t ms) {
+    if (ms <= 0) return true;
+    HANDLE h = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    ULARGE_INTEGER u{};
+    u.QuadPart = static_cast<ULONGLONG>(ms) * 10000ull + 116444736000000000ull;
+    FILETIME ft{};
+    ft.dwLowDateTime = u.LowPart;
+    ft.dwHighDateTime = u.HighPart;
+    bool ok = SetFileTime(h, nullptr, nullptr, &ft) != 0;
+    CloseHandle(h);
     return ok;
 }
 

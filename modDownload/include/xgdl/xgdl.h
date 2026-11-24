@@ -25,6 +25,30 @@ namespace xgdl {
 
 enum class Priority { High = 0, Normal = 1, Low = 2 };
 
+// 校验算法。None = 不校验；其余用系统 CNG 算文件摘要后与十六进制串比对。
+enum class HashAlg { None, Md5, Sha1, Sha256, Sha512 };
+
+struct HashExpect {
+    HashAlg alg = HashAlg::None;
+    std::wstring hex;           // 小写最稳妥，比较时大小写不敏感
+};
+
+// 单任务的完整选项。除了 expectBytes / hash 之外都是可选增强：
+//   * mirrors   : 主 URL 之外按顺序尝试的备用源（自建镜像/加速域名/回源都走这里，
+//                 库本身不认识任何具体站点）
+//   * headers   : 每个请求附加的头部（Authorization、Referer、UA 覆盖）
+//   * resume    : 失败后从 .part 已下载的字节继续（服务器忽略 Range 时自动退回整段重下）
+//   * mtimeMs   : 完成后把文件修改时间设成这个值（资源清单里通常带时间戳，留着便于增量比对）
+struct TaskOptions {
+    uint64_t expectBytes = 0;
+    HashExpect hash;
+    Priority priority = Priority::Normal;
+    std::vector<std::wstring> mirrors;
+    std::vector<std::pair<std::wstring, std::wstring>> headers;
+    bool resume = true;
+    int64_t mtimeMs = 0;
+};
+
 enum class TaskState {
     Queued,
     Downloading,
@@ -56,6 +80,8 @@ struct Config {
     // 单次请求超时（秒），0 表示不设
     long connectTimeoutSec = 15;
     long idleTimeoutSec = 30;
+    // 全局限速（字节/秒），0 = 不限。按 transfer 设置，多任务时是每个任务的上限
+    uint64_t maxSpeedBytesPerSec = 0;
 };
 
 struct Progress {
@@ -105,6 +131,11 @@ public:
                  uint64_t expectBytes = 0,
                  const std::wstring& expectSha1 = L"",
                  Priority priority = Priority::Normal);
+
+    // 带完整选项的入队（镜像回退 / 请求头 / 断点续传 / 任意摘要 / 修时间戳）。
+    // opt.mirrors 里是"失败后按顺序尝试"的备用 URL，第一个参数 url 是主 URL；
+    // 库不认识任何具体站点，镜像由调用方自己给。
+    uint32_t Add(const std::wstring& url, const std::wstring& path, const TaskOptions& opt);
 
     void Start();
     void Pause();    // 只停止派发新任务，已在跑的继续

@@ -29,6 +29,7 @@
 
 typedef void CURL;
 typedef void CURLM;
+struct curl_slist;
 
 namespace xgdl {
 namespace detail {
@@ -37,6 +38,7 @@ namespace detail {
 struct Sink {
     std::wstring path;
     uint64_t baseOffset = 0;
+    bool append = false;        // true = 以 "ab" 打开（断点续传接着写），否则 "wb"
     uint64_t maxQueueBytes = 1ull << 20;
 
     std::mutex mu;
@@ -51,6 +53,9 @@ struct Sink {
     std::FILE* file = nullptr;
     bool opened = false;
     int openError = 0;
+    // 写盘线程真正关掉文件（或判定失败）后置位：调用方要等它才能改名/合并，
+    // 否则会撞 Windows 的共享冲突（ERROR_SHARING_VIOLATION）
+    std::atomic<bool> closed{ false };
 };
 
 using SinkPtr = std::shared_ptr<Sink>;
@@ -60,6 +65,8 @@ struct Job {
     SinkPtr sink;
     std::wstring url;
     std::string urlUtf8;
+    std::vector<std::pair<std::string, std::string>> headers;   // 请求头（已 UTF-8 化）
+    curl_slist* hdrList = nullptr;                              // 与 headers 对应，句柄销毁时释放
     uint64_t rangeStart = 0;
     uint64_t rangeEnd = 0;      // 0 表示不设上限
 
@@ -85,7 +92,8 @@ public:
     ~Engine();
 
     JobPtr Submit(const std::wstring& url, const SinkPtr& sink,
-                  uint64_t rangeStart = 0, uint64_t rangeEnd = 0);
+                  uint64_t rangeStart = 0, uint64_t rangeEnd = 0,
+                  const std::vector<std::pair<std::wstring, std::wstring>>& headers = {});
     void Cancel(const JobPtr& job);
     void Shutdown();
 
@@ -99,6 +107,8 @@ private:
 
     Config cfg_;
     CURLM* multi_ = nullptr;
+    // curl_multi_* 不是线程安全的：加句柄、perform、info_read、清理都要串行
+    std::mutex curlMu_;
     std::thread net_;
     std::vector<std::thread> writers_;
     std::atomic<bool> running_{ true };
@@ -113,8 +123,18 @@ private:
     bool writerStop_ = false;
 };
 
-// 文件级 SHA1（十六进制小写）。失败时返回 false 并给出错误描述（UTF-8）。
+// 文件级摘要（十六进制小写）。失败时返回 false 并给出错误描述（UTF-8）。
+bool HashFile(HashAlg alg, const std::wstring& path, std::wstring& hex, std::string& err);
 bool Sha1File(const std::wstring& path, std::wstring& hex, std::string& err);
+
+// 文件大小；不存在返回 false
+bool FileSize(const std::wstring& path, uint64_t& bytes);
+
+// 覆盖式改名（REPLACE_EXISTING | WRITE_THROUGH）；用于 .part → 正式文件
+bool MoveReplace(const std::wstring& src, const std::wstring& dst, std::string& err);
+
+// 设置文件修改时间（毫秒，自 1970）
+bool SetFileMtime(const std::wstring& path, int64_t ms);
 
 std::string Utf8(const std::wstring& s);
 std::wstring Widen(const std::string& s);
